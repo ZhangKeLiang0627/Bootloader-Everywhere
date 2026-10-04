@@ -202,6 +202,44 @@ void delay_ms(uint32_t ms) noexcept
 }
 
 /* ========================================================================
+ * 复位原因
+ *
+ * RCC_CSR 里有一组**累积**的复位标志（写 RMVF 一次性清除）：
+ *   LPWRRSTF  bit31  低功耗模式
+ *   WWDGRSTF  bit30  窗口看门狗
+ *   IWDGRSTF  bit29  独立看门狗      ← 这套自确认机制真正关心的
+ *   SFTRSTF   bit28  软件复位（升级完成后本工程主动触发的那种）
+ *   PORRSTF   bit27  上电 / 掉电
+ *   PINRSTF   bit26  NRST 引脚（用户按复位键）
+ *   BORRSTF   bit25  欠压
+ *   RMVF      bit24  写 1 清除上面全部
+ *
+ * ⚠️ 正因为是累积的，必须「读后即清」—— 否则「看门狗复位」这个标志
+ *    会一直粘着，之后每一次正常上电都会被误判成 APP 跑飞。
+ *
+ * ⚠️ 多个位可能同时置位（上电瞬间 POR 与 PIN 常一起置），所以判定按
+ *    「信息量」排序：看门狗最具体，优先识别；不然 APP 跑飞会被误判成
+ *    普通上电，回滚机制就形同虚设。
+ * ======================================================================*/
+ResetCause reset_cause() noexcept
+{
+    const uint32_t csr = RCC->CSR;
+
+    /* 读后即清 */
+    RCC->CSR |= RCC_CSR_RMVF;
+
+    if ((csr & RCC_CSR_IWDGRSTF) != 0U) { return ResetCause::Watchdog; }
+    if ((csr & RCC_CSR_WWDGRSTF) != 0U) { return ResetCause::Watchdog; }
+    if ((csr & RCC_CSR_PORRSTF)  != 0U) { return ResetCause::PowerOn;  }
+    if ((csr & RCC_CSR_PINRSTF)  != 0U) { return ResetCause::Pin;      }
+    if ((csr & RCC_CSR_SFTRSTF)  != 0U) { return ResetCause::Software; }
+    if ((csr & RCC_CSR_BORRSTF)  != 0U) { return ResetCause::BrownOut; }
+    if ((csr & RCC_CSR_LPWRRSTF) != 0U) { return ResetCause::LowPower; }
+
+    return ResetCause::Unknown;
+}
+
+/* ========================================================================
  * 复位
  * ======================================================================*/
 void system_reset() noexcept

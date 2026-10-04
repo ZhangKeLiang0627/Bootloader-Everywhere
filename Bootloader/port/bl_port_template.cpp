@@ -199,9 +199,28 @@ void delay_ms(uint32_t ms) noexcept
     (void)ms;
 }
 
-void system_reset() noexcept
-{
-    /* TODO: 触发系统复位。复位前建议等串口发完，否则调试时总丢最后半行日志 */
-}
+  ResetCause reset_cause() noexcept
+  {
+      /* TODO: 读取并**清除**上次的复位原因。
+       *
+       * 这是「固件自确认」的判据（BL_BOOT_SELF_CONFIRM）：
+       *   - 看门狗复位 → APP 没喂狗，没跑起来
+       *   - 其它       → APP 活下来了
+       *
+       * 两个要点：
+       *   1) 必须读后即清。这类标志在多数 MCU 上是累积的，
+       *      不清的话下一次启动会读到上一次的旧值。
+       *   2) 多种复位原因可能同时置位，按「信息量」排序判定 ——
+       *      先把看门狗挑出来，否则跑飞会被误判成普通上电。
+       *
+       * 若目标芯片没有复位原因寄存器，返回 ResetCause::Unknown
+       * 并同时把 BL_BOOT_SELF_CONFIRM 设为 0。 */
+      return ResetCause::Unknown;
+  }
+  
+  void system_reset() noexcept
+  {
+      /* TODO: 触发系统复位。复位前建议等串口发完，否则调试时总丢最后半行日志 */
+  }
 
 } // namespace bl

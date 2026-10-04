@@ -67,21 +67,72 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
         return { Action::EnterIap, "backdoor" };
     }
 
-    /* ---- 4. Testing 态的启动计数判据 ---- */
+    /* ---- 4. Testing 态的判据（「自确认」机制的核心） ----
+     *
+     * 本工程不要求 APP 主动调用任何确认接口。Bootloader 通过
+     * **复位原因** 客观判断 APP 上一次是否活下来了：
+     *
+     *   看门狗复位 → APP 没喂狗（跑飞 / 卡死 / 一启动就崩）→ 计数 +1，超限回滚
+     *   软件复位   → 升级完成后本工程主动复位的那次 → 第一次运行，保持 Testing
+     *   其它       → 上电 / 按复位：说明 APP 上次活到了用户动手的那一刻
+     *                → 判定健康，自动转为 Valid
+     *
+     * 这样 APP 侧零侵入：它不需要知道配置区地址、槽位格式、CRC 算法，
+     * 也不必引入本库的任何头文件，只需要做它本来就该做的事 —— 喂狗。
+     */
     if (m.state() == FwState::Testing) {
-        const uint32_t attempts = m.bump_boot_attempts();
+#if BL_BOOT_SELF_CONFIRM
+        switch (reset_cause()) {
+        case ResetCause::Watchdog: {
+            /* APP 没能活过看门狗超时 —— 这是「跑不起来」的客观证据 */
+            const uint32_t attempts = m.bump_boot_attempts();
+            BL_LOG("[boot] watchdog reset: app did not survive (%lu/%lu)\r\n",
+                   static_cast<unsigned long>(attempts),
+                   static_cast<unsigned long>(cfg.max_attempts));
 
+            if (attempts > cfg.max_attempts) {
+                BL_LOG("[boot] rollback: app keeps failing after upgrade\r\n");
+                (void)m.revoke();
+                return { Action::EnterIap, "app keeps crashing (watchdog), revoked" };
+            }
+            break;                      /* 再给它一次机会 */
+        }
+
+        case ResetCause::Software:
+            /* 升级完成后本工程主动触发的那次复位 —— 新固件还没被验证过 */
+            (void)m.bump_boot_attempts();
+            BL_LOG("[boot] first boot after upgrade, keep TESTING\r\n");
+            break;
+
+        default:
+            /* 上电 / 按复位 / 欠压：APP 上次活到了用户动手的时刻。
+             *
+             * 但这份证据只在「从未因看门狗失败过」时才采信
+             * （boot_attempts <= 1 表示只记了升级后那一次）。
+             * 否则一个反复跑飞的固件只要用户断电上电就会被洗白成
+             * Valid，回滚机制就永远触发不了 —— 那是比不回滚更糟的状态。 */
+            if (m.current().boot_attempts <= 1U) {
+                BL_LOG("[boot] clean boot -> firmware self-confirmed\r\n");
+                (void)m.confirm_app();
+            } else {
+                BL_LOG("[boot] clean boot, but watchdog failures on record\r\n");
+            }
+            break;
+        }
+#else
+        /* 未启用自确认：退回「每次启动都计数」，
+         * 此时需要 APP 自己调用 bl::app_confirm()。 */
+        const uint32_t attempts = m.bump_boot_attempts();
         BL_LOG("[boot] testing: attempt %lu/%lu\r\n",
                static_cast<unsigned long>(attempts),
                static_cast<unsigned long>(cfg.max_attempts));
 
         if (attempts > cfg.max_attempts) {
-            /* 连续多次都没等到 APP 自检确认，判定该固件有运行时缺陷。
-             * 作废后停在 IAP，等待重刷——这就是「回滚」的实际形态。 */
             BL_LOG("[boot] rollback: app never confirmed\r\n");
             (void)m.revoke();
             return { Action::EnterIap, "app not confirmed, revoked" };
         }
+#endif
     }
 
     /* ---- 5. 向量表校验（廉价，每次必做） ---- */
