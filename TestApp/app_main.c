@@ -348,6 +348,47 @@ static void delay_ms(uint32_t ms)
 }
 
 /* ========================================================================
+ * 「进入 Bootloader」的软件请求
+ *
+ * 与 Bootloader/bl_app.h 的 bl_request_update() 是同一套约定：
+ * 往固定 RAM 地址写 magic，再软件复位。RAM 在 SYSRESETREQ 后内容保留，
+ * 标志能穿透复位，Bootloader 上电看到即进 IAP（不等待、不抢时间窗）。
+ *
+ * 这里不 include bl_app.h，是因为本测试 APP 刻意不依赖 CMSIS（纯寄存器）。
+ * 真实 APP 直接 include bl_app.h 调 bl_request_update() 即可。
+ * ======================================================================*/
+#define BL_UPDATE_REQ_ADDR      0x20017FFCUL    /* 必须与 bl_config.h 一致 */
+#define BL_UPDATE_REQ_MAGIC     0xB007B007UL
+
+static void request_update(void)
+{
+    REG32(BL_UPDATE_REQ_ADDR) = BL_UPDATE_REQ_MAGIC;
+    __asm volatile ("dsb");
+    /* SCB->AIRCR = VECTKEY | SYSRESETREQ（软件复位，SRAM 不丢） */
+    REG32(0xE000ED0CUL) = 0x05FA0004UL;
+    for (;;) { }                                /* 兜底 */
+}
+
+/* 轮询串口，检测「进入 Bootloader」指令：0x7F(DEL)。
+ *
+ * 阈值取 1 而不是连续多个：APP 的主循环每 100ms 才轮到一次轮询，
+ * 而 USART 只有单字节缓冲，上位机连发的多个 0x7F 会因 overrun 只留下
+ * 一个可读 —— 计数式的多字节检测在这个轮询模型下永远凑不满，反而失灵。
+ * 好在 APP 运行期间串口输入只可能是唤回指令，单字节 0x7F 误触发风险极低。 */
+static void poll_boot_request(void)
+{
+    if ((USART1_SR & (1UL << 5)) == 0UL) {      /* RXNE 无数据 */
+        return;
+    }
+    const uint32_t ch = USART1_DR & 0xFFUL;
+
+    if (ch == 0x7FUL) {
+        uart_puts("[app] enter-bootloader cmd, rebooting...\r\n");
+        request_update();
+    }
+}
+
+/* ========================================================================
  * 启动
  *
  * SystemInit 由 startup 在进入 __main 之前调用。
@@ -442,6 +483,7 @@ int main(void)
 
         for (uint32_t i = 0; i < 10U; ++i) {
             iwdg_feed();
+            poll_boot_request();   /* 检测「进入 Bootloader」指令 */
             delay_ms(100U);
         }
     }
