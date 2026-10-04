@@ -51,6 +51,20 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
 {
     Meta& m = meta();
 
+    /* 复位原因必须在**每次启动都读一次** —— 这是 read-and-clear 语义：
+     * 硬件把这些标志累积着，只有读了才会清掉。
+     *
+     * 踩过的坑：最初只在 Testing 分支里读。于是状态为 Valid 的那些启动
+     * 从不清标志，POR / PIN 之类的旧原因一直积着；等到下次升级、首次
+     * 启动时读到的是陈年旧账，被误判成 clean boot 直接转成 Valid ——
+     * 结果是回滚机制永不触发，坏固件被无限重启。
+     * （实测症状：故障固件每 6 秒被看门狗复位一次，但 state 始终是
+     *  VALID、attempts 始终为 0。） */
+    const ResetCause cause = reset_cause();
+    (void)cause;        /* BL_BOOT_SELF_CONFIRM = 0 时用不到它，但必须读 */
+    BL_LOG("[boot] reset cause = %lu (0=unk 1=por 2=pin 3=sft 4=wdg)\r\n",
+           static_cast<unsigned long>(cause));
+
     /* ---- 1. APP 是否请求过升级 ---- */
     if (m.update_requested()) {
         (void)m.clear_update_request();
@@ -82,9 +96,24 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
      */
     if (m.state() == FwState::Testing) {
 #if BL_BOOT_SELF_CONFIRM
-        switch (reset_cause()) {
-        case ResetCause::Watchdog: {
-            /* APP 没能活过看门狗超时 —— 这是「跑不起来」的客观证据 */
+        /* 判据分两层，先看「跑过没有」，再看「是怎么复位的」。
+         *
+         * 为什么不能只靠复位原因：「首次启动」和「用户按复位」这两件事
+         * 在复位原因上区分不开 —— 实测发现升级完成后的
+         * NVIC_SystemReset() 会被在线探针连带拖出一次 PIN 复位，
+         * 于是本该是 sft 的那次报成了 pin，逻辑就走到错误的支路去了。
+         *
+         * 而 commit() 会把 boot_attempts 清成 0，所以
+         *   attempts == 0  ⇔  新固件刚写入、一次都还没跑过
+         * 这个判据不依赖复位原因的准确性，稳得多。 */
+        const uint32_t prev = m.current().boot_attempts;
+
+        if (prev == 0U) {
+            /* 升级后的第一次运行：开始计时，保持 Testing */
+            (void)m.bump_boot_attempts();
+            BL_LOG("[boot] fresh upgrade: first run, keep TESTING\r\n");
+        } else if (cause == ResetCause::Watchdog) {
+            /* APP 没能活过看门狗超时 —— 「跑不起来」的客观证据 */
             const uint32_t attempts = m.bump_boot_attempts();
             BL_LOG("[boot] watchdog reset: app did not survive (%lu/%lu)\r\n",
                    static_cast<unsigned long>(attempts),
@@ -95,29 +124,15 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
                 (void)m.revoke();
                 return { Action::EnterIap, "app keeps crashing (watchdog), revoked" };
             }
-            break;                      /* 再给它一次机会 */
-        }
-
-        case ResetCause::Software:
-            /* 升级完成后本工程主动触发的那次复位 —— 新固件还没被验证过 */
-            (void)m.bump_boot_attempts();
-            BL_LOG("[boot] first boot after upgrade, keep TESTING\r\n");
-            break;
-
-        default:
-            /* 上电 / 按复位 / 欠压：APP 上次活到了用户动手的时刻。
+        } else if (prev <= 1U) {
+            /* 跑过、且没被看门狗拉回来过 → 可判定它是健康的。
              *
-             * 但这份证据只在「从未因看门狗失败过」时才采信
-             * （boot_attempts <= 1 表示只记了升级后那一次）。
-             * 否则一个反复跑飞的固件只要用户断电上电就会被洗白成
-             * Valid，回滚机制就永远触发不了 —— 那是比不回滚更糟的状态。 */
-            if (m.current().boot_attempts <= 1U) {
-                BL_LOG("[boot] clean boot -> firmware self-confirmed\r\n");
-                (void)m.confirm_app();
-            } else {
-                BL_LOG("[boot] clean boot, but watchdog failures on record\r\n");
-            }
-            break;
+             * 上限 1 是为了防「洗白」：一个反复跑飞的固件 attempts 会 >= 2，
+             * 那时即使用户断电上电也一概不认，否则回滚机制就永远触发不了。 */
+            BL_LOG("[boot] clean boot -> firmware self-confirmed\r\n");
+            (void)m.confirm_app();
+        } else {
+            BL_LOG("[boot] clean boot, but watchdog failures on record\r\n");
         }
 #else
         /* 未启用自确认：退回「每次启动都计数」，
