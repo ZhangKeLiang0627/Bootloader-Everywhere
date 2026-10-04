@@ -65,7 +65,25 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
     BL_LOG("[boot] reset cause = %lu (0=unk 1=por 2=pin 3=sft 4=wdg)\r\n",
            static_cast<unsigned long>(cause));
 
-    /* ---- 1. APP 是否请求过升级 ---- */
+    /* ---- 0. 软件请求升级（RAM 标志 + 软复位） ----
+     *
+     * APP 想回 Bootloader 时，往 BL_UPDATE_REQ_ADDR 写 magic 再软复位。
+     * RAM 在 SYSRESETREQ 后内容保留，标志穿透复位到这一步。
+     *
+     * 这是「正常 APP 唤回 IAP」的主通道，取代了原来的上电 backdoor 时间窗：
+     * Bootloader 无需空等，APP 启动零延迟，且 APP 运行中也能随时唤回。
+     * 读取后立即清除 —— 冷上电 RAM 随机，magic 已把误判概率压到 1/2^32。 */
+    {
+        volatile uint32_t* const req =
+            reinterpret_cast<volatile uint32_t*>(BL_UPDATE_REQ_ADDR);
+        if (*req == BL_UPDATE_REQ_MAGIC) {
+            *req = 0U;
+            BL_LOG("[boot] update requested via ram flag\r\n");
+            return { Action::EnterIap, "update requested via ram flag" };
+        }
+    }
+
+    /* ---- 1. APP 是否请求过升级（配置区持久化标志） ---- */
     if (m.update_requested()) {
         (void)m.clear_update_request();
         return { Action::EnterIap, "update requested by app" };
