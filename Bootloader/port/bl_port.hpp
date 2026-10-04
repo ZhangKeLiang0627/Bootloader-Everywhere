@@ -153,6 +153,36 @@ uint32_t tick_ms() noexcept;
  */
 void delay_ms(uint32_t ms) noexcept;
 
+/**
+ * @brief 上次复位的原因
+ *
+ * 这是「固件自确认」机制的判据。它让 Bootloader **不需要 APP 主动调用
+ * 任何接口**就能判断 APP 上次是否正常跑起来了：
+ *
+ *   - `Watchdog` → APP 没能喂狗（跑飞 / 卡死 / 一启动就崩），
+ *                  被独立看门狗拉了回来；
+ *   - 其它原因   → 上电 / 按复位 / 升级后的主动软复位，
+ *                  说明 APP 活到了这一刻，它是健康的。
+ *
+ * 因此 APP 侧零侵入：它不必知道 Bootloader 的存在，也不必包含配置区的
+ * 任何格式定义，只需要做它本来就该做的事 —— 喂狗。
+ *
+ * ⚠️ 实现必须「读后即清」。STM32 的 RCC 复位标志是累积的，
+ *    不清的话下一次启动会读到上一次的旧标志。
+ */
+enum class ResetCause : uint32_t {
+    Unknown   = 0,   ///< 无法判定
+    PowerOn,         ///< 上电 / 掉电复位
+    Pin,             ///< NRST 引脚复位（用户按了复位键）
+    Software,        ///< 软件复位（升级完成后 Bootloader 主动触发）
+    Watchdog,        ///< 独立看门狗复位（APP 没喂狗）
+    BrownOut,        ///< 欠压复位
+    LowPower,        ///< 低功耗模式复位
+};
+
+/// 读取并清除上次复位原因
+ResetCause reset_cause() noexcept;
+
 /// 触发系统复位（升级完成后重启）
 [[noreturn]] void system_reset() noexcept;
 
