@@ -139,24 +139,25 @@ function onProgress(done, total, kbps) {
 }
 
 /**
- * 唤回 Bootloader：向串口发 0x7F(DEL)。
+ * 唤回 Bootloader：向串口发关键字 "#Bootloader-Everywhere"。
  *
- * - 若设备在跑 APP：APP 的串口监听收到 0x7F 后写 RAM 标志并软复位，
- *   Bootloader 上电看到标志即进 IAP。
- * - 若设备已在 IAP：0x7F 被 Bootloader 的握手等待当作噪声忽略，无害。
+ * APP 检测到完整关键字后软复位，Bootloader 靠复位原因（软件复位 + Valid 态）
+ * 进入限时升级窗口（15s），窗口内等 YMODEM 首包。
  *
- * 连发 5 个：APP 主循环是 100ms 轮询，单发一个可能恰好落在轮询间隙被
- * 丢弃，连发保证至少有一个被读到。
+ * 必须逐字节慢发：APP 主循环每 100ms 才轮询一次串口，而 USART 只有单字节
+ * 缓冲，一口气连发会导致 overrun、状态机凑不齐关键字。每字节间隔 150ms，
+ * 大于 APP 轮询周期，确保逐字节被捕获。
  */
 async function wakeUpBootloader() {
     log('唤回 Bootloader ...', 'step');
-    for (let i = 0; i < 5; i++) {
+    const magic = '#Bootloader-Everywhere';
+    for (const ch of magic) {
         if (!writer) break;
-        try { await writer.write(new Uint8Array([0x7F])); } catch (_) { break; }
-        await io.pump(30);
+        try { await writer.write(new Uint8Array([ch.charCodeAt(0)])); } catch (_) { break; }
+        await io.pump(150);
     }
-    // 等设备复位并进入 IAP（真正的等待由 sender.send() 的握手超时兜底）
-    await io.pump(400);
+    // 等设备软复位进入窗口（真正的等待由 sender.send() 的握手超时兜底）
+    await io.pump(300);
 }
 
 async function doSend() {

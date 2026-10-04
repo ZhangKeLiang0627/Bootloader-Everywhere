@@ -43,7 +43,8 @@ python -m http.server 8080
 
 - **必须用 Chrome / Edge**（Firefox / Safari 不支持 Web Serial）。
 - 板子要处于 **IAP 等待状态**（串口周期性吐 `C`）。如果 APP 在正常跑，
-  先复位，上电 300 ms 内按住 `DEL`（0x7F）触发 Backdoor 强制进 IAP。
+  点「开始升级」会自动发关键字 `#Bootloader-Everywhere` 把 APP 唤回
+  Bootloader（软复位进限时窗口），无需手动复位或按任何键。
 - 升级时**不需要**预先算 CRC32 —— 整镜像 CRC 由板端自算；
   帧级 CRC16 由协议自带，这里照规范实现即可。
 - 板端调试日志与协议字节共用串口，页面会把它标成「板端」显示，别当成错误。
