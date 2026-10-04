@@ -159,13 +159,36 @@
  * ==========================================================================*/
 
 /**
+ * 「进入 Bootloader」的软件请求通道：APP 写 magic 到固定 RAM 地址后软复位。
+ *
+ * RAM 内容在软件复位（SYSRESETREQ）后保留，所以这个标志能穿透复位，
+ * Bootloader 上电立刻就能看到「APP 请求过升级」。
+ *
+ * 相比上电 backdoor 时间窗，它的好处是：
+ *   - Bootloader 上电**零等待**立即决策，APP 启动没有 300ms 拖累
+ *   - APP 运行中也能随时唤回（不必抢上电那几百毫秒，正常人本来就卡不准）
+ *   - APP 侧只需两行：写 magic、软件复位（见 bl_app.h 的 bl_request_update）
+ *
+ * 冷上电时 RAM 内容随机，故用 32 位 magic 压低误判概率，读到后立即清除。
+ * APP 侧对应接口见 Bootloader/bl_app.h（同一个宏，两处必须一致）。
+ */
+#ifndef BL_UPDATE_REQ_ADDR
+#define BL_UPDATE_REQ_ADDR          (BL_SRAM_END - 4UL)
+#endif
+
+#ifndef BL_UPDATE_REQ_MAGIC
+#define BL_UPDATE_REQ_MAGIC         0xB007B007UL
+#endif
+
+/**
  * 上电后监听 backdoor 字符的时间窗（毫秒）；0 表示关闭
  *
- * 用途：设备已经能正常启动时，想强制进 IAP 刷机 —— 上电瞬间连按 DEL 即可，
- * 不必拆机接调试器。窗口太短手慢按不到，太长会拖慢每次正常启动。
+ * 已被上面的 RAM 标志方案取代，默认关闭。保留此开关是为兼容：
+ * 若某产品既不方便改 APP、又想保留「上电连按 DEL 进 IAP」的旧习惯，
+ * 可手动打开。但代价是每次正常启动都要空等这段时间。
  */
 #ifndef BL_BACKDOOR_WINDOW_MS
-#define BL_BACKDOOR_WINDOW_MS       300UL
+#define BL_BACKDOOR_WINDOW_MS       0UL
 #endif
 
 /** backdoor 触发字符（0x7F = DEL，串口工具里好按且不与文本冲突） */
