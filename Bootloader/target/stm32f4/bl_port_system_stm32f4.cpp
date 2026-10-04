@@ -35,14 +35,28 @@ void jump_to_app(uint32_t app_base) noexcept
     /* 1. 关全局中断 */
     __disable_irq();
 
-    /* 2. 停 SysTick 并清计数 */
+    /* 2. 复位 RCC 到默认态（HSI）。
+     *    APP 的 SystemInit 会按自己的配置重建 PLL。
+     *
+     * ⚠️ 顺序陷阱（实测踩过，很隐蔽）：
+     *    HAL_RCC_DeInit() 内部末尾会调用 HAL_InitTick()，
+     *    也就是**重新把 SysTick 配成 1ms 并使能它的中断**。
+     *    因此「关 SysTick」必须放在它**之后**，放到前面会被它悄悄重新打开。
+     *    后果是 APP 一跑起来就不断被 SysTick 中断打断，而 APP 的向量表里
+     *    SysTick_Handler 通常是空的（Default_Handler = 一条 B .），
+     *    于是直接卡死在异常处理里 —— 现象是「APP 完全不输出任何字符」，
+     *    光看串口根本无法定位。必须用调试器读 ICSR 才能看到
+     *    VECTACTIVE = 15。 */
+    HAL_RCC_DeInit();
+
+    /* 3. 关 SysTick 并清掉可能已经挂起的请求 */
     SysTick->CTRL = 0U;
     SysTick->LOAD = 0U;
     SysTick->VAL  = 0U;
 
-    /* 3. 复位 RCC 到默认态（HSI）。
-     *    APP 的 SystemInit 会按自己的配置重建 PLL。 */
-    HAL_RCC_DeInit();
+    /* SysTick / PendSV 是系统异常，不在 NVIC 里，必须单独清挂起位，
+     * 否则 APP 一开中断就会立刻冲进这两个 handler。 */
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
 
     /* 4. 清所有 NVIC 中断使能与挂起标志 */
     for (uint32_t i = 0; i < 8U; ++i) {
@@ -50,14 +64,16 @@ void jump_to_app(uint32_t app_base) noexcept
         NVIC->ICPR[i] = 0xFFFFFFFFU;
     }
 
-    /* 5. 重定位向量表到 APP */
+    /* 5. 重定位向量表到 APP，并保证它对后续取指立即生效 */
     SCB->VTOR = app_base;
+    __DSB();
 
     /* 6. 设置主堆栈指针 */
     __set_MSP(initial_sp);
 
     /* 7. 回到特权级 + 使用 MSP（若之前用过 PSP） */
     __set_CONTROL(0U);
+    __ISB();
 
     /* 8. 开中断并跳转 */
     __enable_irq();
@@ -126,16 +142,35 @@ inline IwdgRegs& iwdg() noexcept
 void wdg_init() noexcept
 {
 #if BL_USE_WATCHDOG
-    /* 确保 LSI 已起振（IWDG 的时钟源） */
-    RCC->CSR |= RCC_CSR_LSION;
-    while ((RCC->CSR & RCC_CSR_LSIRDY) == 0U) {
+    /* 顺序与 ST 的 HAL_IWDG_Init 保持一致：先启动、再改参数。
+     *
+     *   1) 写 0xCCCC 启动 IWDG —— 硬件会顺带把 LSI 振荡器打开
+     *   2) 等 SR 的 PVU/RVU 落（此时 LSI 已在跑，这两位才可能被清除）
+     *   3) 写 0x5555 允许改写，再写 PR/RLR
+     *   4) 喂一次
+     *
+     * 反过来的顺序（先 0x5555 + PR/RLR 再 0xCCCC）会踩坑：
+     * LSI 尚未起振时 IWDG 没有时钟，SR 的 PVU/RVU 会一直保持 1，
+     * 任何"等它清零"的循环都会死锁。所有等待都带超时，硬件异常时也能走完。 */
+    iwdg().KR = kKeyEnable;                          /* 启动（LSI 随之使能） */
+
+    for (uint32_t i = 0; i < 0x100000U; ++i) {       /* 等 LSI 起振、SR 清零 */
+        if (iwdg().SR == 0U) {
+            break;
+        }
     }
 
-    iwdg().KR = kKeyWriteEnable;
+    iwdg().KR = kKeyWriteEnable;                     /* 允许改写 PR/RLR */
     iwdg().PR = kPrescalerDiv64;
     iwdg().RLR = kReloadValue;
-    iwdg().KR = kKeyReload;      /* 装载 */
-    iwdg().KR = kKeyEnable;      /* 启动，此后不可停止 */
+
+    for (uint32_t i = 0; i < 0x100000U; ++i) {       /* 等参数写入生效 */
+        if ((iwdg().SR & 0x3U) == 0U) {
+            break;
+        }
+    }
+
+    iwdg().KR = kKeyReload;                          /* 装载，此后不可停止 */
 #endif
 }
 

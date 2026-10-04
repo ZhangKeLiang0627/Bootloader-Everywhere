@@ -170,8 +170,33 @@ Status clock_fallback_hsi() noexcept
 /* ============================================================================
  * 对外：平台初始化
  * ==========================================================================*/
+namespace {
+
+/**
+ * @brief 使能 FPU（CP10 / CP11 全访问）
+ *
+ * 复位后 CPACR = 0，含义是「禁止访问协处理器」。本工程按硬浮点编译
+ * （-mfloat-abi=hard），只要执行到一条 VFP 指令，就会立刻触发
+ * UsageFault(NOCP) 并被升级成 HardFault —— 现象是刚启动就卡死，
+ * 而且从表面完全看不出跟浮点有关，非常难猜。
+ *
+ * ST 的 system_stm32f4xx.c 在 SystemInit 里做的第一件事就是它，
+ * 这里保持相同的位置与语义：**任何可能用到浮点的代码之前**。
+ */
+void fpu_enable() noexcept
+{
+    SCB->CPACR |= ((3UL << 20) | (3UL << 22));   /* CP10, CP11 全访问 */
+    __DSB();
+    __ISB();
+}
+
+} // namespace
+
 Status platform_init() noexcept
 {
+    /* 0. FPU 必须最先使能 —— 见 fpu_enable 的说明 */
+    fpu_enable();
+
     /* 1. HAL 底座：中断优先级分组、1ms 时基、HAL_MspInit */
     if (HAL_Init() != HAL_OK) {
         return Status::Error;
