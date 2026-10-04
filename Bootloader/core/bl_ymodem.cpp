@@ -195,6 +195,12 @@ Ymodem::Outcome Ymodem::receive() noexcept
         return out;
     }
 
+    /* 握手阶段总超时的计时起点。软件复位唤回 Bootloader 时，只给上位机
+     * 一个有限窗口（handshake_timeout_ms，默认 15s）：窗口内没等到
+     * YMODEM 首包就超时退出，让调用方跳回 APP；否则会永远卡在 IAP。
+     * 置 0 表示关闭（握手无限等，恢复传统行为）。 */
+    const uint32_t handshake_start = tick_ms();
+
     uint32_t offset       = 0;
     bool     session_done = false;
 
@@ -312,20 +318,25 @@ Ymodem::Outcome Ymodem::receive() noexcept
             case RecvRc::BadFrame:
             case RecvRc::Timeout:
             default: {
-                /* 已在收数据途中才算错误，握手阶段不算 */
                 if (session_begun) {
-                    ++errors;
-                }
-                if (errors > cfg_.max_errors) {
-                    send_abort();
+                    /* 已在收数据途中：累计连续超时，超限中止 */
+                    if (++errors > cfg_.max_errors) {
+                        send_abort();
+                        out.status = Status::Timeout;
+                        file_done  = true;
+                        break;
+                    }
+                } else if (cfg_.handshake_timeout_ms != 0U &&
+                           (tick_ms() - handshake_start) >= cfg_.handshake_timeout_ms) {
+                    /* 握手总超时：窗口内没等到首包，超时退出 */
                     out.status = Status::Timeout;
                     file_done  = true;
-                } else {
-                    /* 请求重发：发 'C' 会被当成请求下一包，
-                     * 仅对 CRC 模式有效；乱序/损坏时用 NAK 更准确 */
-                    send_byte(Code::ReqC);
-                    ++out.stats.retries;
+                    break;
                 }
+                /* 请求重发：发 'C' 会被当成请求下一包，
+                 * 仅对 CRC 模式有效；乱序/损坏时用 NAK 更准确 */
+                send_byte(Code::ReqC);
+                ++out.stats.retries;
                 break;
             }
 

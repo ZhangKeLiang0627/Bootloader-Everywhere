@@ -350,31 +350,28 @@ static void delay_ms(uint32_t ms)
 /* ========================================================================
  * 「进入 Bootloader」的软件请求
  *
- * 与 Bootloader/bl_app.h 的 bl_request_update() 是同一套约定：
- * 往固定 RAM 地址写 magic，再软件复位。RAM 在 SYSRESETREQ 后内容保留，
- * 标志能穿透复位，Bootloader 上电看到即进 IAP（不等待、不抢时间窗）。
+ * 与 Bootloader/bl_app.h 的 bl_request_update() 是同一套约定：只做软件
+ * 复位，不写任何标志。Bootloader 靠复位原因（软件复位 + 固件 Valid 态）
+ * 识别唤回，进入限时升级窗口（默认 15s）。
  *
  * 这里不 include bl_app.h，是因为本测试 APP 刻意不依赖 CMSIS（纯寄存器）。
  * 真实 APP 直接 include bl_app.h 调 bl_request_update() 即可。
  * ======================================================================*/
-#define BL_UPDATE_REQ_ADDR      0x20017FFCUL    /* 必须与 bl_config.h 一致 */
-#define BL_UPDATE_REQ_MAGIC     0xB007B007UL
-
 static void request_update(void)
 {
-    REG32(BL_UPDATE_REQ_ADDR) = BL_UPDATE_REQ_MAGIC;
-    __asm volatile ("dsb");
     /* SCB->AIRCR = VECTKEY | SYSRESETREQ（软件复位，SRAM 不丢） */
     REG32(0xE000ED0CUL) = 0x05FA0004UL;
+    __asm volatile ("dsb");
     for (;;) { }                                /* 兜底 */
 }
 
-/* 轮询串口，检测「进入 Bootloader」指令：0x7F(DEL)。
+/* 轮询串口，检测「进入 Bootloader」指令：逐字节匹配关键字
+ * "#Bootloader-Everywhere"（状态机），匹配完整才触发。
  *
- * 阈值取 1 而不是连续多个：APP 的主循环每 100ms 才轮到一次轮询，
- * 而 USART 只有单字节缓冲，上位机连发的多个 0x7F 会因 overrun 只留下
- * 一个可读 —— 计数式的多字节检测在这个轮询模型下永远凑不满，反而失灵。
- * 好在 APP 运行期间串口输入只可能是唤回指令，单字节 0x7F 误触发风险极低。 */
+ * 轮询模型下的坑：主循环每 100ms 才轮到一次轮询，而 USART 只有单字节
+ * 缓冲，上位机若把关键字一口气连发，会因 overrun 只剩一个字节可读，
+ * 状态机永远凑不齐。因此上位机（网页）必须逐字节慢发（每字节间隔约
+ * 150ms，大于轮询周期），APP 才能逐字节捕获。 */
 static void poll_boot_request(void)
 {
     if ((USART1_SR & (1UL << 5)) == 0UL) {      /* RXNE 无数据 */
@@ -382,10 +379,21 @@ static void poll_boot_request(void)
     }
     const uint32_t ch = USART1_DR & 0xFFUL;
 
-    if (ch == 0x7FUL) {
-        uart_puts("[app] enter-bootloader cmd, rebooting...\r\n");
-        request_update();
+    static const char magic[] = "#Bootloader-Everywhere";
+    static uint32_t match = 0U;
+
+    if (ch == (uint32_t)(uint8_t)magic[match]) {
+        ++match;
+        if (magic[match] == '\0') {
+            uart_puts("[app] enter-bootloader cmd, rebooting...\r\n");
+            request_update();
+        }
+        return;
     }
+
+    /* 不匹配：若当前字节恰是关键字首字符，从 1 重新起头
+     * （处理 "##Boot..." 这类连续输入，避免漏掉重叠匹配） */
+    match = (ch == (uint32_t)(uint8_t)magic[0]) ? 1U : 0U;
 }
 
 /* ========================================================================

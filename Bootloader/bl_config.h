@@ -159,26 +159,17 @@
  * ==========================================================================*/
 
 /**
- * 「进入 Bootloader」的软件请求通道：APP 写 magic 到固定 RAM 地址后软复位。
+ * 「进入 Bootloader」的软件请求通道：APP 检测到升级指令后软复位，不写任何
+ * 标志。Bootloader 靠复位原因识别「软件复位 + 固件 Valid 态」进入限时升级
+ * 窗口（与 OpenBLT 的软复位后门同源，但零等待、零侵入）。
  *
- * RAM 内容在软件复位（SYSRESETREQ）后保留，所以这个标志能穿透复位，
- * Bootloader 上电立刻就能看到「APP 请求过升级」。
+ *   - 正常上电 / 硬件复位（POR/PIN）→ 直接跳 APP，零等待
+ *   - 软件复位 + 固件 Valid 态      → 进限时窗口，时长 = BL_YMODEM_HANDSHAKE_MS
+ *   - 软件复位 + 固件 Testing 态    → 升级完成复位，照常跳 APP（不误进窗口）
  *
- * 相比上电 backdoor 时间窗，它的好处是：
- *   - Bootloader 上电**零等待**立即决策，APP 启动没有 300ms 拖累
- *   - APP 运行中也能随时唤回（不必抢上电那几百毫秒，正常人本来就卡不准）
- *   - APP 侧只需两行：写 magic、软件复位（见 bl_app.h 的 bl_request_update）
- *
- * 冷上电时 RAM 内容随机，故用 32 位 magic 压低误判概率，读到后立即清除。
- * APP 侧对应接口见 Bootloader/bl_app.h（同一个宏，两处必须一致）。
+ * APP 侧只需软件复位（见 Bootloader/bl_app.h 的 bl_request_update），
+ * 不必包含本库其它文件，也不必知道配置区地址 / 槽位格式 / CRC 算法。
  */
-#ifndef BL_UPDATE_REQ_ADDR
-#define BL_UPDATE_REQ_ADDR          (BL_SRAM_END - 4UL)
-#endif
-
-#ifndef BL_UPDATE_REQ_MAGIC
-#define BL_UPDATE_REQ_MAGIC         0xB007B007UL
-#endif
 
 /**
  * 上电后监听 backdoor 字符的时间窗（毫秒）；0 表示关闭

@@ -65,24 +65,6 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
     BL_LOG("[boot] reset cause = %lu (0=unk 1=por 2=pin 3=sft 4=wdg)\r\n",
            static_cast<unsigned long>(cause));
 
-    /* ---- 0. 软件请求升级（RAM 标志 + 软复位） ----
-     *
-     * APP 想回 Bootloader 时，往 BL_UPDATE_REQ_ADDR 写 magic 再软复位。
-     * RAM 在 SYSRESETREQ 后内容保留，标志穿透复位到这一步。
-     *
-     * 这是「正常 APP 唤回 IAP」的主通道，取代了原来的上电 backdoor 时间窗：
-     * Bootloader 无需空等，APP 启动零延迟，且 APP 运行中也能随时唤回。
-     * 读取后立即清除 —— 冷上电 RAM 随机，magic 已把误判概率压到 1/2^32。 */
-    {
-        volatile uint32_t* const req =
-            reinterpret_cast<volatile uint32_t*>(BL_UPDATE_REQ_ADDR);
-        if (*req == BL_UPDATE_REQ_MAGIC) {
-            *req = 0U;
-            BL_LOG("[boot] update requested via ram flag\r\n");
-            return { Action::EnterIap, "update requested via ram flag" };
-        }
-    }
-
     /* ---- 1. APP 是否请求过升级（配置区持久化标志） ---- */
     if (m.update_requested()) {
         (void)m.clear_update_request();
@@ -94,12 +76,24 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
         return { Action::EnterIap, "no bootable firmware" };
     }
 
-    /* ---- 3. Backdoor 窗口 ---- */
+    /* ---- 3. 软件复位唤回（限时升级窗口） ----
+     *
+     * APP 检测到升级指令后软复位（不写任何标志），Bootloader 靠复位原因
+     * 识别：软件复位 + 固件处于 Valid 态 = APP 运行中被唤回，进限时窗口。
+     *
+     * 为什么限定 Valid：升级完成后 Bootloader 自己也会软复位，那时状态是
+     * Testing，不能一并进窗口（否则升级后永远跳不进新固件）。Testing 态的
+     * 软复位落到下面第 5 步的自确认逻辑，照常跳 APP。 */
+    if (cause == ResetCause::Software && m.state() == FwState::Valid) {
+        return { Action::EnterIapTimed, "soft reset -> upgrade window" };
+    }
+
+    /* ---- 4. Backdoor 窗口 ---- */
     if (wait_backdoor(cfg.backdoor_window_ms, cfg.backdoor_char)) {
         return { Action::EnterIap, "backdoor" };
     }
 
-    /* ---- 4. Testing 态的判据（「自确认」机制的核心） ----
+    /* ---- 5. Testing 态的判据（「自确认」机制的核心） ----
      *
      * 本工程不要求 APP 主动调用任何确认接口。Bootloader 通过
      * **复位原因** 客观判断 APP 上一次是否活下来了：
@@ -168,14 +162,14 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
 #endif
     }
 
-    /* ---- 5. 向量表校验（廉价，每次必做） ---- */
+    /* ---- 6. 向量表校验（廉价，每次必做） ---- */
     if (!ok(verify_vector_table(cfg.app_base, nullptr))) {
         BL_LOG("[boot] invalid vector table\r\n");
         (void)m.revoke();
         return { Action::EnterIap, "vector table invalid" };
     }
 
-    /* ---- 6. 可选：整镜像 CRC32 ---- */
+    /* ---- 7. 可选：整镜像 CRC32 ---- */
     if (cfg.verify_crc_on_boot) {
         const Meta::Slot& s = m.current();
         if (!ok(verify_image(cfg.app_base, s.fw_size, s.fw_crc32, nullptr))) {
@@ -185,7 +179,7 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
         }
     }
 
-    /* ---- 7. 全部通过 ---- */
+    /* ---- 8. 全部通过 ---- */
     return { Action::JumpToApp, "ok" };
 }
 

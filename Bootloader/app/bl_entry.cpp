@@ -173,6 +173,11 @@ void banner() noexcept
         BL_LOG("[main] jump failed, fallback to IAP\r\n");
     }
 
+    /* 软件复位唤回的限时窗口：只给上位机一个有限窗口（15s），
+     * 窗口内没等到 YMODEM 首包就跳回 APP。正常 EnterIap（固件不可启动、
+     * 回滚等）则必须无限等待，否则会反复跳进坏固件。 */
+    bool timed_window = (decision.action == Boot::Action::EnterIapTimed);
+
     /* ---- 8. IAP 循环 ----
      * 每轮处理一次升级。失败不退出，继续等下一次尝试 ——
      * 只要 Bootloader 还在跑，设备就永远有救回来的机会。 */
@@ -194,6 +199,19 @@ void banner() noexcept
             BL_LOG("[main] upgrade done, rebooting...\r\n");
             delay_ms(300);
             system_reset();
+        }
+
+        /* 限时窗口超时（握手没等到首包）→ 跳回 APP。
+         * 判据：握手阶段超时（Timeout）且从未收到首包（fw_size==0）。 */
+        if (timed_window &&
+            r.outcome == IapResult::Failed &&
+            r.error == Status::Timeout &&
+            r.fw_size == 0U) {
+            BL_LOG("[main] upgrade window timeout, jumping to app\r\n");
+            Boot::jump(BL_APP_BASE);
+            /* 跳转失败说明 APP 也不可用，转为无限等待 IAP，不再反复尝试跳转 */
+            BL_LOG("[main] jump failed, keep IAP\r\n");
+            timed_window = false;
         }
 
         /* 失败：短暂停顿后重新进入等待，避免串口刷屏 */
