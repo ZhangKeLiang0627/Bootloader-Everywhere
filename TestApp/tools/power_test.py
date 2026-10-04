@@ -236,13 +236,14 @@ def phase_5():
 
 
 def main():
+    global PORT, TARGET
+
     ap = argparse.ArgumentParser(description="断电暴力测试引导")
     ap.add_argument("--phase", type=int, required=True, choices=range(1, 6))
     ap.add_argument("--port", default=PORT)
     ap.add_argument("--target", default=TARGET)
     args = ap.parse_args()
 
-    global PORT, TARGET
     PORT, TARGET = args.port, args.target
 
     phases = {1: phase_1, 2: phase_2, 3: phase_3, 4: phase_4, 5: phase_5}
