@@ -220,6 +220,11 @@ void delay_ms(uint32_t ms) noexcept
  * ⚠️ 多个位可能同时置位（上电瞬间 POR 与 PIN 常一起置），所以判定按
  *    「信息量」排序：看门狗最具体，优先识别；不然 APP 跑飞会被误判成
  *    普通上电，回滚机制就形同虚设。
+ *
+ * ⚠️ 软件复位（SFTRSTF）排在 POR/PIN 之前：APP 软复位（SYSRESETREQ）时，
+ *    若在线探针（DAPLink）连着，会连带把 NRST 拉一下，PINRSTF 同时置位。
+ *    软件复位是更明确、更具体的意图，必须优先于引脚复位，否则
+ *    「软件复位唤回 Bootloader」这条通道在开发期会被探针干扰而失灵。
  * ======================================================================*/
 ResetCause reset_cause() noexcept
 {
@@ -230,9 +235,9 @@ ResetCause reset_cause() noexcept
 
     if ((csr & RCC_CSR_IWDGRSTF) != 0U) { return ResetCause::Watchdog; }
     if ((csr & RCC_CSR_WWDGRSTF) != 0U) { return ResetCause::Watchdog; }
+    if ((csr & RCC_CSR_SFTRSTF)  != 0U) { return ResetCause::Software; }
     if ((csr & RCC_CSR_PORRSTF)  != 0U) { return ResetCause::PowerOn;  }
     if ((csr & RCC_CSR_PINRSTF)  != 0U) { return ResetCause::Pin;      }
-    if ((csr & RCC_CSR_SFTRSTF)  != 0U) { return ResetCause::Software; }
     if ((csr & RCC_CSR_BORRSTF)  != 0U) { return ResetCause::BrownOut; }
     if ((csr & RCC_CSR_LPWRRSTF) != 0U) { return ResetCause::LowPower; }
 
