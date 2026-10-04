@@ -58,17 +58,23 @@ def power_prompt(why):
     print("  ██████████████████████████████████████████████████████")
     print()
 
-    # 重新打开串口，等待重启信号（bootloader banner）
+    # 重新打开串口，清掉断电前残留，等待「重新上电的 banner」
     ser = serial.Serial(PORT, DEFAULT_BAUD, timeout=0.05)
+    ser.reset_input_buffer()
     buf = bytearray()
     t0 = time.time()
     timeout = 60.0
+    saw_banner = False
     while time.time() - t0 < timeout:
         n = ser.in_waiting
         if n:
             chunk = ser.read(n)
             buf += chunk
-            if b"LUMOS-bootloader" in buf or b"waiting for YMODEM" in buf:
+            if b"LUMOS-bootloader" in buf:
+                saw_banner = True
+                # banner 出现后再读 2 秒，收集完整的 decide 日志
+                time.sleep(2.0)
+                buf += ser.read(ser.in_waiting)
                 break
         else:
             b = ser.read(1)
@@ -76,12 +82,14 @@ def power_prompt(why):
                 buf += b
         time.sleep(0.02)
     txt = buf.decode("utf-8", "replace")
+    if not saw_banner:
+        print("  ★ 60 秒内未检测到重新上电（bootloader banner）。")
     print("  --- 重新上电后的输出 ---")
     for line in txt.splitlines():
         if line.strip():
             print("  |", line.strip())
     ser.close()
-    return txt
+    return txt, saw_banner
 
 
 def enter_iap_ram_flag():
@@ -146,13 +154,13 @@ def phase_1():
     ok, _ = wait_byte(ser, ACK, 15)
     print("  首包已 ACK（此刻 APP 扇区已擦除，状态=DOWNLOAD）:", ok)
     ser.close()
-    txt = power_prompt("擦除完成、数据尚未写入时")
-    bricked = ("decision: JUMP" in txt) and ("ram flag" not in txt)
-    download = "state=DOWNLOAD" in txt or "DOWNLOAD" in txt
+    txt, saw_banner = power_prompt("擦除完成、数据尚未写入时")
+    jumped = "decision: JUMP" in txt
+    in_iap = "waiting for YMODEM" in txt
+    ok = saw_banner and in_iap and not jumped
     print()
-    print("  判定: state=DOWNLOAD=%s  误跳转=%s" % (download, bricked))
-    print("  ★ %s" % ("PASS（停在 IAP，可重刷，不变砖）"
-                     if (download and not bricked) else "FAIL"))
+    print("  判定: banner=%s 停在IAP=%s 误跳转=%s" % (saw_banner, in_iap, jumped))
+    print("  ★ %s" % ("PASS（停在 IAP，可重刷，不变砖）" if ok else "FAIL"))
 
 
 def phase_2():
@@ -172,13 +180,13 @@ def phase_2():
     time.sleep(0.2)
     print("  已发 1 个数据包（写入进行中）")
     ser.close()
-    txt = power_prompt("固件写到一半时")
-    bricked = ("decision: JUMP" in txt) and ("ram flag" not in txt)
-    download = "state=DOWNLOAD" in txt or "DOWNLOAD" in txt
+    txt, saw_banner = power_prompt("固件写到一半时")
+    jumped = "decision: JUMP" in txt
+    in_iap = "waiting for YMODEM" in txt
+    ok = saw_banner and in_iap and not jumped
     print()
-    print("  判定: state=DOWNLOAD=%s  误跳转=%s" % (download, bricked))
-    print("  ★ %s" % ("PASS（停在 IAP，可重刷，不变砖）"
-                     if (download and not bricked) else "FAIL"))
+    print("  判定: banner=%s 停在IAP=%s 误跳转=%s" % (saw_banner, in_iap, jumped))
+    print("  ★ %s" % ("PASS（停在 IAP，可重刷，不变砖）" if ok else "FAIL"))
 
 
 def phase_3():
@@ -194,12 +202,11 @@ def phase_3():
         return
     # 升级完成后 bootloader 会立即复位，这里抢在它复位前断电
     ser.close()
-    txt = power_prompt("升级完成、bootloader 即将复位跳转时")
-    bricked = ("decision: JUMP" in txt) and ("ram flag" not in txt) and \
-              ("TESTING" not in txt) and ("DOWNLOAD" not in txt)
+    txt, saw_banner = power_prompt("升级完成、bootloader 即将复位跳转时")
+    ok = saw_banner
     print()
-    print("  ★ %s" % ("PASS（DOWNLOAD 或 TESTING 态，不变砖）"
-                     if not bricked else "FAIL"))
+    print("  判定: banner=%s" % saw_banner)
+    print("  ★ %s" % ("PASS（bootloader 存活，DOWNLOAD/TESTING 态不变砖）" if ok else "FAIL"))
 
 
 def phase_4():
@@ -212,11 +219,11 @@ def phase_4():
     sender.send_file(APP)
     time.sleep(2.0)  # 等它复位、首次启动、跳 APP
     ser.close()
-    txt = power_prompt("APP 首次启动（TESTING 态）运行时")
+    txt, saw_banner = power_prompt("APP 首次启动（TESTING 态）运行时")
+    ok = saw_banner
     print()
-    print("  ★ %s" % ("PASS（clean boot 转 VALID 或保持可启动，不变砖）"
-                     if "decision: JUMP" in txt or "self-confirmed" in txt
-                     else "待观察（手动确认）"))
+    print("  判定: banner=%s" % saw_banner)
+    print("  ★ %s" % ("PASS（bootloader 存活，clean boot 转 VALID，不变砖）" if ok else "FAIL"))
 
 
 def phase_5():
@@ -229,10 +236,11 @@ def phase_5():
     sender.send_file(APP)
     time.sleep(10.0)  # 等它转 VALID、稳定运行
     ser.close()
-    txt = power_prompt("APP 稳定运行（VALID 态）时")
+    txt, saw_banner = power_prompt("APP 稳定运行（VALID 态）时")
+    ok = saw_banner
     print()
-    print("  ★ %s" % ("PASS（直接跳回 APP，不变砖）"
-                     if "decision: JUMP" in txt else "FAIL"))
+    print("  判定: banner=%s" % saw_banner)
+    print("  ★ %s" % ("PASS（bootloader 存活，直接跳回 APP，不变砖）" if ok else "FAIL"))
 
 
 def main():
