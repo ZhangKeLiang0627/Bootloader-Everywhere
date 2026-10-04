@@ -3,84 +3,78 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LUMOS-bootloader 网页上位机</title>
+<title>Bootloader-Everywhere</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
 <header>
-  <h1>LUMOS-bootloader <span class="sub">网页上位机</span></h1>
-  <div class="badge off" id="status">未连接</div>
+  <div class="brand">
+    <span class="logo">BE</span>
+    <div class="brand-text">
+      <h1>Bootloader-Everywhere</h1>
+      <p class="tagline">串口 IAP · YMODEM-1K · 网页刷机</p>
+    </div>
+  </div>
+  <span class="badge off" id="status">未连接</span>
 </header>
 
 <main>
 
-  <!-- 1. 连接 -->
   <section class="card">
-    <h2><span class="num">1</span> 连接串口</h2>
+    <div class="card-head">
+      <h2><span class="num">1</span> 连接设备</h2>
+      <label class="inline">波特率
+        <select id="baud">
+          <option value="115200" selected>115200</option>
+          <option value="921600">921600</option>
+          <option value="57600">57600</option>
+          <option value="9600">9600</option>
+        </select>
+      </label>
+    </div>
     <div class="row">
-      <label for="baud">波特率</label>
-      <select id="baud">
-        <option value="115200" selected>115200</option>
-        <option value="921600">921600</option>
-        <option value="57600">57600</option>
-        <option value="9600">9600</option>
-      </select>
-      <button id="btnConnect" class="primary">连接</button>
+      <button id="btnConnect" class="primary">连接串口</button>
       <button id="btnDisconnect" disabled>断开</button>
+      <button id="btnBoot" disabled class="ghost">进入 Bootloader</button>
     </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2><span class="num">2</span> 固件</h2>
+    </div>
+    <input type="file" id="file" accept=".bin">
     <p class="hint">
-      浏览器会弹出串口选择框。需要 Chrome / Edge 89+，
-      且页面运行在 <code>https://</code> 或 <code>localhost</code> 下。
+      固件需编译到 <code>0x08004000</code> 起始 —— Bootloader 占用前 16&nbsp;KB，
+      APP 的 IROM 起点与向量表偏移都要跟着对齐。
     </p>
   </section>
 
-  <!-- 2. 选固件 -->
   <section class="card">
-    <h2><span class="num">2</span> 选择固件</h2>
-    <div class="row">
-      <input type="file" id="file" accept=".bin">
-    </div>
-    <p class="hint">
-      选编译出的 <code>.bin</code>（通常几 KB 到几百 KB）。
-      注意：<strong>不需要</strong>事先算好 CRC32 —— 整镜像校验由板子自己完成。
-    </p>
-  </section>
-
-  <!-- 3. 升级 -->
-  <section class="card">
-    <h2><span class="num">3</span> 开始升级</h2>
-    <div class="row">
-      <button id="btnSend" class="primary" disabled>开始升级</button>
+    <div class="card-head">
+      <h2><span class="num">3</span> 升级</h2>
       <span class="stat" id="stat"></span>
     </div>
+    <button id="btnSend" class="primary" disabled>开始升级</button>
     <div class="progress"><div class="bar" id="bar">0%</div></div>
     <p class="hint">
-      板子需要处于 <strong>IAP 等待状态</strong>（串口能看到它周期性发
-      <code>C</code>）。如果 APP 正在正常跑，先按住板子复位，上电 300 ms 内
-      连按 <kbd>DEL</kbd> 触发 Backdoor 强制进入。
+      升级需要设备处于 IAP 状态。若 APP 正在运行，点「进入 Bootloader」把它唤回。
     </p>
   </section>
 
-  <!-- 4. 日志 -->
   <section class="card grow">
-    <h2>
-      <span class="num">4</span> 串口输出
+    <div class="card-head">
+      <h2><span class="num">4</span> 串口输出</h2>
       <button id="btnClear" class="tiny">清空</button>
-    </h2>
+    </div>
     <div class="log" id="log"></div>
-    <p class="hint">
-      板端的调试日志与 YMODEM 的协议字节共用同一个串口，
-      所以这里会同时显示协议进度和板子打印的日志（标为 <em>板端</em>）。
-    </p>
   </section>
 
 </main>
 
 <footer>
-  <span>YMODEM-1K</span>
-  <span>·</span>
-  <span>整镜像 CRC32 由板端自算，上位机无需关心</span>
+  <span>YMODEM-1K</span><span>·</span><span>整镜像 CRC32 由板端自算</span>
 </footer>
 
 <script type="module" src="js/app.js"></script>

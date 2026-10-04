@@ -73,9 +73,27 @@ function setConnected(on) {
     $('btnConnect').disabled = on;
     $('btnDisconnect').disabled = !on;
     $('btnSend').disabled = !on || busy;
+    $('btnBoot').disabled = !on || busy;
     $('baud').disabled = on;
     $('status').textContent = on ? '已连接' : '未连接';
     $('status').className = 'badge ' + (on ? 'on' : 'off');
+}
+
+/**
+ * 「进入 Bootloader」：向运行中的 APP 发送唤回指令。
+ *
+ * 协议：连续发 5 个 0x7F（DEL）。APP 侧检测到该序列后，写 RAM 标志
+ * 并软件复位，Bootloader 上电看到标志即进入 IAP。
+ * 用 5 个而非单个，是为了降低与数据流里的 0x7F 撞车的概率。
+ */
+async function enterBoot() {
+    if (!writer) { log('请先连接串口', 'err'); return; }
+    log('发送「进入 Bootloader」指令 ...', 'step');
+    for (let i = 0; i < 5; i++) {
+        await writer.write(new Uint8Array([0x7F]));
+        await io.pump(25);
+    }
+    log('已发送。若设备运行的是支持该指令的 APP，会复位回到 Bootloader。', 'dim');
 }
 
 async function disconnect() {
@@ -185,6 +203,7 @@ window.addEventListener('DOMContentLoaded', () => {
     $('btnConnect').addEventListener('click', connect);
     $('btnDisconnect').addEventListener('click', disconnect);
     $('btnSend').addEventListener('click', doSend);
+    $('btnBoot').addEventListener('click', enterBoot);
     $('btnClear').addEventListener('click', clearLog);
 
     if (!('serial' in navigator)) {
