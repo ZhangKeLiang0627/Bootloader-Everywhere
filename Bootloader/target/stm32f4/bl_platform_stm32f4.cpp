@@ -253,15 +253,7 @@ extern "C" void HAL_MspInit(void)
     __HAL_RCC_PWR_CLK_ENABLE();
 }
 
-/**
- * 硬件异常兜底
- *
- * 直写 USART1 数据寄存器汇报，不经过 HAL、不用缓冲区、不做格式化 ——
- * 即使故障来自栈损坏或内存错误，也还有机会把这句话吐出去。
- *
- * 之后死循环等待：若启用了看门狗，2 秒后会自动复位重来；
- * 若没启用，则停在原地等调试器接管。两种情况下设备都能救回来。
- */
+/// 硬件异常兜底：直写串口汇报，然后死循环等调试器
 extern "C" void HardFault_Handler(void)
 {
     static const char kMsg[] = "\r\n!! HARDFAULT in LUMOS-bootloader !!\r\n";

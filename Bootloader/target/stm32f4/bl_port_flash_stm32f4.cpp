@@ -217,8 +217,6 @@ Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept
     HAL_FLASH_Unlock();
 
     while (addr < end) {
-        wdg_feed();
-
         const uint32_t remain   = end - addr;
         uint32_t       word     = 0;
         uint32_t       consumed = 4U;

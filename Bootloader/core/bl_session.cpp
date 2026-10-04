@@ -71,8 +71,6 @@ bool Session::erase_region(uint32_t bytes) noexcept
     const uint32_t end = cfg_.app_base + bytes;
 
     while (addr < end) {
-        wdg_feed();
-
         const uint32_t sector_size = flash_sector_size(addr);
         if (sector_size == 0U) {
             BL_LOG("[session] erase: bad sector at 0x%08lX\r\n",
@@ -245,8 +243,7 @@ Session::Result Session::run() noexcept
         return result_;
     }
 
-    /* 提交：置 Testing 并记录 size / crc32 / 版本
-     * 之后由 APP 自检通过时调用 Meta::confirm_app() 转为 Valid */
+    /* 提交：置 Valid 并记录 size / crc32 / 版本 */
     if (!ok(meta().commit(result_.fw_size, result_.fw_crc32, result_.version))) {
         result_.outcome = IapResult::Failed;
         result_.error   = Status::FlashFail;

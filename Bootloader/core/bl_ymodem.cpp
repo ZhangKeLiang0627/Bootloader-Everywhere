@@ -154,8 +154,6 @@ Ymodem::RecvRc Ymodem::recv_packet(uint32_t& len) noexcept
 bool Ymodem::wait_end_packet() noexcept
 {
     for (uint32_t attempt = 0; attempt < 3U; ++attempt) {
-        wdg_feed();
-
         if (!send_byte(Code::ReqC)) {
             break;
         }
@@ -213,8 +211,6 @@ Ymodem::Outcome Ymodem::receive() noexcept
         uint32_t naks         = 0;      /* 连续 NAK 计数 */
 
         while (!file_done && ok(out.status)) {
-            wdg_feed();
-
             uint32_t     len = 0;
             const RecvRc rc  = recv_packet(len);
 
