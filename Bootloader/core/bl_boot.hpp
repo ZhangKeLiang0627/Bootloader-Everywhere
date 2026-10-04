@@ -40,6 +40,13 @@ public:
     struct Decision {
         Action      action = Action::EnterIap;
         const char* reason = "";
+
+        /* 显式提供构造函数，而不是靠聚合初始化 {a, b}：
+         * C++11 里「带默认成员初始化器的结构体」不算聚合类型，
+         * 花括号初始化会编译不过。本库保持 C++11 可编译。 */
+        Decision() = default;
+        constexpr Decision(Action a, const char* r) noexcept
+            : action(a), reason(r) {}
     };
 
     /**

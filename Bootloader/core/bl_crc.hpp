@@ -30,7 +30,11 @@ public:
     constexpr Crc16() noexcept : value_(kInit) {}
 
     /// 复位到初始值，便于复用同一个对象
-    constexpr void reset() noexcept { value_ = kInit; }
+    ///
+    /// 注意这里不能标 constexpr：C++11 下 constexpr 成员函数隐含 const，
+    /// 而它要改成员，会编译不过。本库刻意保持 C++11 可编译 ——
+    /// 目标工程未必把标准调到 C++14。
+    void reset() noexcept { value_ = kInit; }
 
     /// 增量累加
     void update(const void* data, uint32_t len) noexcept;
@@ -59,7 +63,8 @@ public:
 
     constexpr Crc32() noexcept : value_(kInit) {}
 
-    constexpr void reset() noexcept { value_ = kInit; }
+    /// 复位（同样不能标 constexpr，原因见 Crc16::reset）
+    void reset() noexcept { value_ = kInit; }
 
     /// 增量累加（value_ 保存的是未做最终异或的中间值）
     void update(const void* data, uint32_t len) noexcept;

@@ -49,6 +49,15 @@ constexpr uint32_t kSectorCount =
 static_assert(BL_FLASH_SIZE >= (256U * 1024U),
               "BL_FLASH_SIZE 太小：F4 至少要 256KB 才放得下 16KB Bootloader + 配置区");
 
+/** 地址相对 Flash 起始的偏移 */
+constexpr uint32_t flash_off(uint32_t addr) noexcept
+{
+    return addr - BL_FLASH_BASE;
+}
+
+/* 下面几个都写成「单个 return 表达式」而不是先声明局部变量：
+ * C++11 的 constexpr 函数体只允许一条 return 语句。 */
+
 /** 地址是否落在本片 Flash 内 */
 constexpr bool in_flash(uint32_t addr) noexcept
 {
@@ -58,10 +67,9 @@ constexpr bool in_flash(uint32_t addr) noexcept
 /** 地址所属扇区序号；越界时返回值 >= kSectorCount */
 constexpr uint32_t sector_index(uint32_t addr) noexcept
 {
-    const uint32_t off = addr - BL_FLASH_BASE;
-    return (off < kMidBase)   ? (off / kSmallSize) :
-           (off < kLargeBase) ? kSmallCount :
-           (kSmallCount + 1U + (off - kLargeBase) / kLargeSize);
+    return (flash_off(addr) < kMidBase)   ? (flash_off(addr) / kSmallSize) :
+           (flash_off(addr) < kLargeBase) ? kSmallCount :
+           (kSmallCount + 1U + (flash_off(addr) - kLargeBase) / kLargeSize);
 }
 
 /** 扇区起始地址 */

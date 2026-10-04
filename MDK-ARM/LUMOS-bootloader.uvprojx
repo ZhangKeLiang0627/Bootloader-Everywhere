@@ -14,11 +14,11 @@
       <uAC6>1</uAC6>
       <TargetOption>
         <TargetCommonOption>
-          <Device>STM32F405RGTx</Device>
+          <Device>STM32F401RETx</Device>
           <Vendor>STMicroelectronics</Vendor>
           <PackID>Keil.STM32F4xx_DFP.3.1.1</PackID>
           <PackURL>https://www.keil.com/pack/</PackURL>
-          <Cpu>IRAM(0x20000000-0x2001BFFF) IRAM2(0x2001C000-0x2001FFFF) IROM(0x8000000-0x80FFFFF) CLOCK(25000000) FPU2 CPUTYPE("Cortex-M4") TZ</Cpu>
+          <Cpu>IRAM(0x20000000-0x20017FFF) IROM(0x8000000-0x807FFFF) CLOCK(25000000) FPU2 CPUTYPE("Cortex-M4")</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
           <StartupFile></StartupFile>
           <FlashDriverDll></FlashDriverDll>
@@ -246,12 +246,12 @@
               <IRAM>
                 <Type>0</Type>
                 <StartAddress>0x20000000</StartAddress>
-                <Size>0x1c000</Size>
+                <Size>0x18000</Size>
               </IRAM>
               <IROM>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x100000</Size>
+                <Size>0x4000</Size>
               </IROM>
               <XRAM>
                 <Type>0</Type>
@@ -276,7 +276,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x100000</Size>
+                <Size>0x4000</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -301,7 +301,7 @@
               <OCR_RVCT9>
                 <Type>0</Type>
                 <StartAddress>0x20000000</StartAddress>
-                <Size>0x1c000</Size>
+                <Size>0x18000</Size>
               </OCR_RVCT9>
               <OCR_RVCT10>
                 <Type>0</Type>
@@ -336,10 +336,10 @@
             <v6WtE>0</v6WtE>
             <v6Rtti>0</v6Rtti>
             <VariousControls>
-              <MiscControls></MiscControls>
-              <Define>USE_HAL_DRIVER,STM32F405xx</Define>
+              <MiscControls>-Oz -fno-exceptions</MiscControls>
+              <Define>USE_HAL_DRIVER,STM32F401xE,HSE_VALUE=25000000</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\Bsp\usart;..\3rdParty\CMSIS-DAP;..\UserApp;..\3rdParty\ArduinoJson\src</IncludePath>
+              <IncludePath>..\Bootloader;../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -381,132 +381,157 @@
       </TargetOption>
       <Groups>
         <Group>
-          <GroupName>Application/MDK-ARM</GroupName>
+          <GroupName>LUMOS/Startup</GroupName>
           <Files>
             <File>
-              <FileName>startup_stm32f405xx.s</FileName>
+              <FileName>startup_stm32f401xe.s</FileName>
               <FileType>2</FileType>
-              <FilePath>startup_stm32f405xx.s</FilePath>
+              <FilePath>startup_stm32f401xe.s</FilePath>
             </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>Application/User/Core</GroupName>
+          <GroupName>LUMOS/Bootloader/core</GroupName>
           <Files>
             <File>
-              <FileName>main.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/main.c</FilePath>
+              <FileName>bl_log.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\core\bl_log.cpp</FilePath>
             </File>
             <File>
-              <FileName>gpio.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/gpio.c</FilePath>
+              <FileName>bl_crc.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\core\bl_crc.cpp</FilePath>
             </File>
             <File>
-              <FileName>usart.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/usart.c</FilePath>
+              <FileName>bl_meta.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\core\bl_meta.cpp</FilePath>
             </File>
             <File>
-              <FileName>stm32f4xx_it.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/stm32f4xx_it.c</FilePath>
+              <FileName>bl_ymodem.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\core\bl_ymodem.cpp</FilePath>
             </File>
             <File>
-              <FileName>stm32f4xx_hal_msp.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/stm32f4xx_hal_msp.c</FilePath>
+              <FileName>bl_verify.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\core\bl_verify.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>bl_session.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\core\bl_session.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>bl_boot.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\core\bl_boot.cpp</FilePath>
             </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>Drivers/STM32F4xx_HAL_Driver</GroupName>
+          <GroupName>LUMOS/Bootloader/target</GroupName>
           <Files>
             <File>
-              <FileName>stm32f4xx_hal_tim.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c</FilePath>
+              <FileName>bl_platform_stm32f4.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\target\stm32f4\bl_platform_stm32f4.cpp</FilePath>
             </File>
             <File>
-              <FileName>stm32f4xx_hal_tim_ex.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c</FilePath>
+              <FileName>bl_port_flash_stm32f4.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\target\stm32f4\bl_port_flash_stm32f4.cpp</FilePath>
             </File>
             <File>
-              <FileName>stm32f4xx_hal_uart.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c</FilePath>
+              <FileName>bl_port_uart_stm32f4.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\target\stm32f4\bl_port_uart_stm32f4.cpp</FilePath>
             </File>
             <File>
-              <FileName>stm32f4xx_hal_rcc.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c</FilePath>
+              <FileName>bl_port_system_stm32f4.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\target\stm32f4\bl_port_system_stm32f4.cpp</FilePath>
             </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>LUMOS/Bootloader/app</GroupName>
+          <Files>
             <File>
-              <FileName>stm32f4xx_hal_rcc_ex.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c</FilePath>
+              <FileName>bl_entry.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\app\bl_entry.cpp</FilePath>
             </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>LUMOS/Drivers/HAL</GroupName>
+          <Files>
             <File>
-              <FileName>stm32f4xx_hal_flash.c</FileName>
+              <FileName>stm32f4xx_hal.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_flash_ex.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_flash_ramfunc.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ramfunc.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_gpio.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_dma_ex.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma_ex.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_dma.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_pwr.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c</FilePath>
-            </File>
-            <File>
-              <FileName>stm32f4xx_hal_pwr_ex.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c</FilePath>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal.c</FilePath>
             </File>
             <File>
               <FileName>stm32f4xx_hal_cortex.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c</FilePath>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_cortex.c</FilePath>
             </File>
             <File>
-              <FileName>stm32f4xx_hal.c</FileName>
+              <FileName>stm32f4xx_hal_rcc.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c</FilePath>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_rcc.c</FilePath>
             </File>
             <File>
-              <FileName>stm32f4xx_hal_exti.c</FileName>
+              <FileName>stm32f4xx_hal_rcc_ex.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_exti.c</FilePath>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_rcc_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_gpio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_gpio.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_flash_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_flash_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_flash_ramfunc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_flash_ramfunc.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_pwr.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_pwr.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_pwr_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_pwr_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_dma.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Drivers\STM32F4xx_HAL_Driver\Src\stm32f4xx_hal_dma.c</FilePath>
             </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>Drivers/CMSIS</GroupName>
+          <GroupName>LUMOS/Drivers/CMSIS</GroupName>
           <Files>
             <File>
               <FileName>system_stm32f4xx.c</FileName>
@@ -514,74 +539,6 @@
               <FilePath>../Core/Src/system_stm32f4xx.c</FilePath>
             </File>
           </Files>
-        </Group>
-        <Group>
-          <GroupName>3rdParty/CMSIS-DAP</GroupName>
-          <Files>
-            <File>
-              <FileName>DAP.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\DAP.c</FilePath>
-            </File>
-            <File>
-              <FileName>error.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\error.c</FilePath>
-            </File>
-            <File>
-              <FileName>JTAG_DP.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\JTAG_DP.c</FilePath>
-            </File>
-            <File>
-              <FileName>STM32F4xx_1024.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\STM32F4xx_1024.c</FilePath>
-            </File>
-            <File>
-              <FileName>SW_DP.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\SW_DP.c</FilePath>
-            </File>
-            <File>
-              <FileName>SWD_flash.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\SWD_flash.c</FilePath>
-            </File>
-            <File>
-              <FileName>SWD_host.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\SWD_host.c</FilePath>
-            </File>
-            <File>
-              <FileName>SWO.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\3rdParty\CMSIS-DAP\SWO.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Bsp</GroupName>
-          <Files>
-            <File>
-              <FileName>interface_uart.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Bsp\usart\interface_uart.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>UserApp</GroupName>
-          <Files>
-            <File>
-              <FileName>main.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\UserApp\main.cpp</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>::CMSIS</GroupName>
         </Group>
       </Groups>
     </Target>

@@ -62,3 +62,7 @@ MDK-ARM/LUMOS-bootloader.uvguix.*
 # LUMOS-bootloader 命令行构建产物（tools/build.py 输出）
 /build/
 *.bin
+
+# Keil 命令行构建/下载日志
+MDK-ARM/uv_build.log
+MDK-ARM/uv_flash.log
