@@ -1,29 +1,91 @@
 /**
  * @file    bl_port_uart_stm32f4.cpp
- * @brief   STM32F4 串口驱动（USART1 / PA9 / PA10）
+ * @brief   STM32F4 串口驱动 —— 自持句柄与引脚，不依赖宿主工程的 usart.c
  *
- * 采用「阻塞 + 总超时」的简单实现：IAP 阶段的数据量不大
- * （115200 下 1MB 约 100 秒），HAL 轮询的开销相对传输时间可忽略，
- * 换来的是行为可预测、无中断竞态。
- * 若将来需要提速到 921600，可改为「中断 + 环形缓冲」或 DMA。
+ * 方案：阻塞轮询 + 总超时。
+ *   YMODEM 是停等协议（PC 收到 ACK 才发下一帧），MCU 收 1KB 约 89ms，
+ *   然后用 1ms 级的时间校验并写 Flash —— 不存在「边收边处理」的压力。
+ *   115200 下字节间隔 87µs，而单字节轮询开销只有几微秒，余量两个数量级，
+ *   所以不会丢字节。换来的是行为可预测、没有中断竞态。
+ *
+ * 什么时候必须换实现：波特率提到 921600 时字节间隔降到 10.8µs，
+ * 轮询就濒临丢字节，届时把 uart_read 改成 DMA + 环形缓冲即可 ——
+ * port/bl_port.hpp 的接口一行都不用动。
  */
-#include "stm32f4xx_hal.h"
-#include "usart.h"
-#include "bl_port.hpp"
-#include "bl_config.h"
+#include "bl_config.h"          /* 必须最先 */
+
+#include "target/stm32f4/bl_target_config.h"
+#include "target/stm32f4/bl_target_internal.hpp"
+
+#include "port/bl_port.hpp"
 
 namespace bl {
+namespace {
+
+/** 控制台串口句柄：由本文件独占持有 */
+UART_HandleTypeDef g_uart{};
+
+/** 配置 TX/RX 引脚复用。放在 uart_init 里而不是 MspInit，
+ *  是为了让整个适配层不依赖 HAL 的回调约定，调用路径更直白。 */
+void gpio_setup() noexcept
+{
+    BL_UART_GPIO_CLK_ENABLE();
+    BL_UART_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio{};
+    gpio.Pin       = BL_UART_TX_PIN | BL_UART_RX_PIN;
+    gpio.Mode      = GPIO_MODE_AF_PP;
+    gpio.Pull      = GPIO_PULLUP;
+    gpio.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+    gpio.Alternate = BL_UART_GPIO_AF;
+    HAL_GPIO_Init(BL_UART_GPIO_PORT, &gpio);
+}
+
+} // namespace
+
+namespace stm32f4 {
+
+UART_HandleTypeDef& console_uart() noexcept
+{
+    return g_uart;
+}
+
+void console_tx_flush(uint32_t timeout_ms) noexcept
+{
+    const uint32_t start = HAL_GetTick();
+    while (__HAL_UART_GET_FLAG(&g_uart, UART_FLAG_TC) == RESET) {
+        if ((HAL_GetTick() - start) >= timeout_ms) {
+            break;      /* 串口没初始化时不能无限等 */
+        }
+    }
+}
+
+} // namespace stm32f4
 
 /* ========================================================================
  * 初始化
  * ======================================================================*/
 Status uart_init(uint32_t baudrate) noexcept
 {
-    huart1.Init.BaudRate = baudrate;
+    if (baudrate == 0U) {
+        return Status::BadParam;
+    }
 
-    if (HAL_UART_Init(&huart1) != HAL_OK) {
+    gpio_setup();
+
+    g_uart.Instance          = BL_UART_INSTANCE;
+    g_uart.Init.BaudRate     = baudrate;
+    g_uart.Init.WordLength   = UART_WORDLENGTH_8B;
+    g_uart.Init.StopBits     = UART_STOPBITS_1;
+    g_uart.Init.Parity       = UART_PARITY_NONE;
+    g_uart.Init.Mode         = UART_MODE_TX_RX;
+    g_uart.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
+    g_uart.Init.OverSampling = UART_OVERSAMPLING_16;
+
+    if (HAL_UART_Init(&g_uart) != HAL_OK) {
         return Status::Error;
     }
+
     uart_flush_rx();
     return Status::Ok;
 }
@@ -31,8 +93,8 @@ Status uart_init(uint32_t baudrate) noexcept
 /* ========================================================================
  * 运行时改波特率（为将来的提速方案预留）
  *
- * 注意：改完之后必须双方同步，否则链路立刻失步。
- * 本端改完会清空收发缓冲，避免残留数据被误当成新协议内容。
+ * 改完之后必须双方同步，否则链路立刻失步。
+ * 本端先等发完，再改参数，最后清空收发缓冲，避免残留数据被当成新协议内容。
  * ======================================================================*/
 Status uart_set_baudrate(uint32_t baudrate) noexcept
 {
@@ -40,13 +102,10 @@ Status uart_set_baudrate(uint32_t baudrate) noexcept
         return Status::BadParam;
     }
 
-    /* 等发送移位寄存器彻底空掉，再改参数 */
-    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET) {
-        wdg_feed();
-    }
+    stm32f4::console_tx_flush(100U);
 
-    huart1.Init.BaudRate = baudrate;
-    if (HAL_UART_Init(&huart1) != HAL_OK) {
+    g_uart.Init.BaudRate = baudrate;
+    if (HAL_UART_Init(&g_uart) != HAL_OK) {
         return Status::Error;
     }
 
@@ -56,7 +115,16 @@ Status uart_set_baudrate(uint32_t baudrate) noexcept
 
 /* ========================================================================
  * 读取：逐字节收，带总超时
+ *
+ * 注意两次阻塞的叠加：HAL_UART_Receive 的超时是「单次调用」的超时，
+ * 如果直接把它设成整个总超时（比如等首包的 3 秒），中间就没有机会喂狗，
+ * 看门狗会先把我们复位。所以这里把单次调用的等待切成小片，片与片之间
+ * 喂狗 —— 既保住总超时语义，又不会饿死狗。
  * ======================================================================*/
+namespace {
+constexpr uint32_t kMaxBlockingSliceMs = 50U;
+}
+
 Status uart_read(uint8_t* buf, uint32_t len,
                  uint32_t timeout_ms, uint32_t* out_read) noexcept
 {
@@ -77,15 +145,21 @@ Status uart_read(uint8_t* buf, uint32_t len,
         if (timeout_ms != 0U) {
             const uint32_t elapsed = HAL_GetTick() - start;
             if (elapsed >= timeout_ms) {
-                break;                      /* 总超时 */
+                break;                          /* 总超时 */
             }
             slice = timeout_ms - elapsed;
         } else {
-            slice = 1U;                     /* 0 表示只试一次 */
+            slice = 1U;                         /* 0 表示只试一次 */
         }
 
+        /* 切片：保证每 50ms 至少回到循环一次去喂狗 */
+        if (slice > kMaxBlockingSliceMs) {
+            slice = kMaxBlockingSliceMs;
+        }
+        wdg_feed();
+
         uint8_t ch = 0;
-        if (HAL_UART_Receive(&huart1, &ch, 1, slice) == HAL_OK) {
+        if (HAL_UART_Receive(&g_uart, &ch, 1, slice) == HAL_OK) {
             buf[got++] = ch;
         } else if (timeout_ms == 0U) {
             break;
@@ -103,19 +177,18 @@ Status uart_read(uint8_t* buf, uint32_t len,
 /* ========================================================================
  * 非阻塞探测单字节
  *
- * 直接读数据寄存器：这样是真正的「不等待」。
- * HAL_UART_Receive 即便超时传 0 也会走一轮状态机，在 backdoor
- * 轮询这种高频场景下不够轻量。
+ * 直接读数据寄存器才是真正的「不等待」：HAL_UART_Receive 即使超时传 0
+ * 也会走一轮状态机，在 backdoor 轮询这种高频场景下不够轻量。
  * ======================================================================*/
 bool uart_try_getc(uint8_t* ch) noexcept
 {
     if (ch == nullptr) {
         return false;
     }
-    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) == RESET) {
+    if (__HAL_UART_GET_FLAG(&g_uart, UART_FLAG_RXNE) == RESET) {
         return false;
     }
-    *ch = static_cast<uint8_t>(huart1.Instance->DR & 0xFFU);
+    *ch = static_cast<uint8_t>(g_uart.Instance->DR & 0xFFU);
     return true;
 }
 
@@ -128,9 +201,9 @@ Status uart_write(const uint8_t* buf, uint32_t len) noexcept
         return Status::BadParam;
     }
 
-    const uint32_t slice = 1000U + (len / 10U);   /* 按长度给足余量 */
+    const uint32_t slice = 1000U + (len / 10U);      /* 按长度给足余量 */
 
-    if (HAL_UART_Transmit(&huart1, const_cast<uint8_t*>(buf), len, slice) != HAL_OK) {
+    if (HAL_UART_Transmit(&g_uart, const_cast<uint8_t*>(buf), len, slice) != HAL_OK) {
         return Status::Timeout;
     }
     return Status::Ok;
@@ -141,15 +214,15 @@ Status uart_write(const uint8_t* buf, uint32_t len) noexcept
  * ======================================================================*/
 void uart_flush_rx() noexcept
 {
-    /* 清溢出标志，否则后续接收会一直被阻塞 */
-    __HAL_UART_CLEAR_OREFLAG(&huart1);
-    __HAL_UART_CLEAR_FEFLAG(&huart1);
-    __HAL_UART_CLEAR_NEFLAG(&huart1);
-    __HAL_UART_CLEAR_PEFLAG(&huart1);
+    /* 先清错误标志，否则后续接收会一直被阻塞 */
+    __HAL_UART_CLEAR_OREFLAG(&g_uart);
+    __HAL_UART_CLEAR_FEFLAG(&g_uart);
+    __HAL_UART_CLEAR_NEFLAG(&g_uart);
+    __HAL_UART_CLEAR_PEFLAG(&g_uart);
 
     uint32_t guard = 0;
-    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) != RESET && guard++ < 4096U) {
-        (void)huart1.Instance->DR;
+    while (__HAL_UART_GET_FLAG(&g_uart, UART_FLAG_RXNE) != RESET && guard++ < 4096U) {
+        (void)g_uart.Instance->DR;
     }
 }
 

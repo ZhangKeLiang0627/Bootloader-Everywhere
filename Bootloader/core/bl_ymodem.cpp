@@ -21,9 +21,9 @@
  * 此刻 PC 正在等 ACK，数秒的擦除耗时不会触发上位机超时；
  * 若改为边收边擦，128KB 扇区约 1 秒的擦除会撑爆多数工具的默认超时。
  */
-#include "bl_ymodem.hpp"
-#include "bl_crc.hpp"
-#include "bl_port.hpp"
+#include "core/bl_ymodem.hpp"
+#include "core/bl_crc.hpp"
+#include "port/bl_port.hpp"
 
 namespace bl {
 

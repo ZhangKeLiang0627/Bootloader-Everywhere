@@ -1,7 +1,7 @@
-;*******************************************************************************
-;* File Name          : startup_stm32f405xx.s
+;********************************************************************************
+;* File Name          : startup_stm32f407xx.s
 ;* Author             : MCD Application Team
-;* Description        : STM32F405xx devices vector table for MDK-ARM toolchain. 
+;* Description        : STM32F407xx devices vector table for MDK-ARM toolchain. 
 ;*                      This module performs:
 ;*                      - Set the initial SP
 ;*                      - Set the initial PC == Reset_Handler
@@ -10,6 +10,7 @@
 ;*                        calls main()).
 ;*                      After Reset the CortexM4 processor is in Thread mode,
 ;*                      priority is Privileged, and the Stack is set to Main.
+;* <<< Use Configuration Wizard in Context Menu >>>   
 ;*******************************************************************************
 ;* @attention
 ;*
@@ -21,15 +22,14 @@
 ;* If no LICENSE file comes with this software, it is provided AS-IS.
 ;*
 ;*******************************************************************************
-;* <<< Use Configuration Wizard in Context Menu >>>
-;
+
 ; Amount of memory (in bytes) allocated for Stack
 ; Tailor this value to your application needs
 ; <h> Stack Configuration
 ;   <o> Stack Size (in Bytes) <0x0-0xFFFFFFFF:8>
 ; </h>
 
-Stack_Size		EQU     0x1000
+Stack_Size      EQU     0x1000;
 
                 AREA    STACK, NOINIT, READWRITE, ALIGN=3
 Stack_Mem       SPACE   Stack_Size
@@ -40,7 +40,7 @@ __initial_sp
 ;   <o>  Heap Size (in Bytes) <0x0-0xFFFFFFFF:8>
 ; </h>
 
-Heap_Size      EQU     0x0000
+Heap_Size      EQU     0x000;
 
                 AREA    HEAP, NOINIT, READWRITE, ALIGN=3
 __heap_base
@@ -135,9 +135,9 @@ __Vectors       DCD     __initial_sp               ; Top of Stack
                 DCD     DMA2_Stream1_IRQHandler           ; DMA2 Stream 1                                   
                 DCD     DMA2_Stream2_IRQHandler           ; DMA2 Stream 2                                   
                 DCD     DMA2_Stream3_IRQHandler           ; DMA2 Stream 3                                   
-                DCD     DMA2_Stream4_IRQHandler           ; DMA2 Stream 4
-                DCD     0                                 ; Reserved  
-                DCD     0                                 ; Reserved  
+                DCD     DMA2_Stream4_IRQHandler           ; DMA2 Stream 4                                   
+                DCD     ETH_IRQHandler                    ; Ethernet                                        
+                DCD     ETH_WKUP_IRQHandler               ; Ethernet Wakeup through EXTI line                      
                 DCD     CAN2_TX_IRQHandler                ; CAN2 TX                                                
                 DCD     CAN2_RX0_IRQHandler               ; CAN2 RX0                                               
                 DCD     CAN2_RX1_IRQHandler               ; CAN2 RX1                                               
@@ -153,7 +153,7 @@ __Vectors       DCD     __initial_sp               ; Top of Stack
                 DCD     OTG_HS_EP1_IN_IRQHandler          ; USB OTG HS End Point 1 In                       
                 DCD     OTG_HS_WKUP_IRQHandler            ; USB OTG HS Wakeup through EXTI                         
                 DCD     OTG_HS_IRQHandler                 ; USB OTG HS                                      
-                DCD     0                                 ; Reserved  
+                DCD     DCMI_IRQHandler                   ; DCMI  
                 DCD     0                                 ; Reserved				                              
                 DCD     HASH_RNG_IRQHandler               ; Hash and Rng
                 DCD     FPU_IRQHandler                    ; FPU
@@ -283,7 +283,9 @@ Default_Handler PROC
                 EXPORT  DMA2_Stream1_IRQHandler           [WEAK]                                   
                 EXPORT  DMA2_Stream2_IRQHandler           [WEAK]                                    
                 EXPORT  DMA2_Stream3_IRQHandler           [WEAK]                                    
-                EXPORT  DMA2_Stream4_IRQHandler           [WEAK]                                                      
+                EXPORT  DMA2_Stream4_IRQHandler           [WEAK]                                 
+                EXPORT  ETH_IRQHandler                    [WEAK]                                         
+                EXPORT  ETH_WKUP_IRQHandler               [WEAK]                     
                 EXPORT  CAN2_TX_IRQHandler                [WEAK]                                               
                 EXPORT  CAN2_RX0_IRQHandler               [WEAK]                                               
                 EXPORT  CAN2_RX1_IRQHandler               [WEAK]                                               
@@ -298,7 +300,8 @@ Default_Handler PROC
                 EXPORT  OTG_HS_EP1_OUT_IRQHandler         [WEAK]                      
                 EXPORT  OTG_HS_EP1_IN_IRQHandler          [WEAK]                      
                 EXPORT  OTG_HS_WKUP_IRQHandler            [WEAK]                        
-                EXPORT  OTG_HS_IRQHandler                 [WEAK]                                                                                                                      
+                EXPORT  OTG_HS_IRQHandler                 [WEAK]                                      
+                EXPORT  DCMI_IRQHandler                   [WEAK]                                                                                 
                 EXPORT  HASH_RNG_IRQHandler               [WEAK]
                 EXPORT  FPU_IRQHandler                    [WEAK]
                 
@@ -362,7 +365,9 @@ DMA2_Stream0_IRQHandler
 DMA2_Stream1_IRQHandler                                          
 DMA2_Stream2_IRQHandler                                           
 DMA2_Stream3_IRQHandler                                           
-DMA2_Stream4_IRQHandler                                                                        
+DMA2_Stream4_IRQHandler                                        
+ETH_IRQHandler                                                         
+ETH_WKUP_IRQHandler                                
 CAN2_TX_IRQHandler                                                           
 CAN2_RX0_IRQHandler                                                          
 CAN2_RX1_IRQHandler                                                          
@@ -377,7 +382,8 @@ I2C3_ER_IRQHandler
 OTG_HS_EP1_OUT_IRQHandler                           
 OTG_HS_EP1_IN_IRQHandler                            
 OTG_HS_WKUP_IRQHandler                                
-OTG_HS_IRQHandler                                                                                                                                                             
+OTG_HS_IRQHandler                                                   
+DCMI_IRQHandler                                                                                                             
 HASH_RNG_IRQHandler
 FPU_IRQHandler  
            
@@ -414,3 +420,4 @@ __user_initial_stackheap
                  ENDIF
 
                  END
+

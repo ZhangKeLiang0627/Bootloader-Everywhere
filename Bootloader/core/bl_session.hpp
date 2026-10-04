@@ -22,8 +22,8 @@
 #ifndef BL_SESSION_HPP
 #define BL_SESSION_HPP
 
-#include "bl_ymodem.hpp"
-#include "bl_crc.hpp"
+#include "core/bl_ymodem.hpp"
+#include "core/bl_crc.hpp"
 
 namespace bl {
 

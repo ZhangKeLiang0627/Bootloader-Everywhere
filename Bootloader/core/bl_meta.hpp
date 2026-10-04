@@ -13,7 +13,7 @@
 #ifndef BL_META_HPP
 #define BL_META_HPP
 
-#include "bl_types.hpp"
+#include "core/bl_types.hpp"
 #include "bl_config.h"
 
 namespace bl {
@@ -138,6 +138,35 @@ private:
  * 可避免静态初始化顺序问题。
  */
 Meta& meta() noexcept;
+
+/* ========================================================================
+ * APP 侧便捷接口
+ *
+ * 下面两个是给「被引导的应用固件」用的，不是给 Bootloader 自己。
+ * 做成头文件内联，APP 工程引用到就能用。
+ *
+ * 最简单的用法（APP 自己的 main 里）：
+ *     #include "bl.hpp"
+ *     ...
+ *     if (self_test_ok()) {
+ *         bl::app_confirm();      // 告诉 Bootloader「这次真的跑起来了」
+ *     }
+ *
+ * 不调 app_confirm 的后果：固件停在 TESTING，启动计数每次 +1，
+ * 到 BL_BOOT_MAX_ATTEMPTS 次后被判为「能过校验但跑不起来」并自动回滚。
+ * ======================================================================*/
+
+/// APP 自检通过时调用：状态转 VALID 并清零启动计数
+inline Status app_confirm() noexcept
+{
+    return meta().confirm_app();
+}
+
+/// APP 请求下次上电进入升级模式
+inline Status app_request_update() noexcept
+{
+    return meta().request_update();
+}
 
 } // namespace bl
 

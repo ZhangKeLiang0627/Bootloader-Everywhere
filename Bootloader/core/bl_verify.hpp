@@ -17,7 +17,7 @@
 #ifndef BL_VERIFY_HPP
 #define BL_VERIFY_HPP
 
-#include "bl_types.hpp"
+#include "core/bl_types.hpp"
 
 namespace bl {
 

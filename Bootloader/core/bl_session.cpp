@@ -2,12 +2,12 @@
  * @file    bl_session.cpp
  * @brief   升级会话编排的实现
  */
-#include "bl_session.hpp"
-#include "bl_meta.hpp"
-#include "bl_crc.hpp"
-#include "bl_verify.hpp"
-#include "bl_port.hpp"
-#include "bl_log.hpp"
+#include "core/bl_session.hpp"
+#include "core/bl_meta.hpp"
+#include "core/bl_crc.hpp"
+#include "core/bl_verify.hpp"
+#include "port/bl_port.hpp"
+#include "core/bl_log.hpp"
 
 namespace bl {
 

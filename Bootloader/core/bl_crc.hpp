@@ -15,7 +15,7 @@
 #ifndef BL_CRC_HPP
 #define BL_CRC_HPP
 
-#include "bl_types.hpp"
+#include "core/bl_types.hpp"
 
 namespace bl {
 

@@ -2,11 +2,11 @@
  * @file    bl_boot.cpp
  * @brief   启动决策的实现
  */
-#include "bl_boot.hpp"
-#include "bl_meta.hpp"
-#include "bl_verify.hpp"
-#include "bl_port.hpp"
-#include "bl_log.hpp"
+#include "core/bl_boot.hpp"
+#include "core/bl_meta.hpp"
+#include "core/bl_verify.hpp"
+#include "port/bl_port.hpp"
+#include "core/bl_log.hpp"
 
 namespace bl {
 

@@ -1,128 +1,159 @@
 /**
  * @file    bl_port_flash_stm32f4.cpp
- * @brief   STM32F4（大容量，1MB）内部 Flash 驱动
+ * @brief   STM32F4 内部 Flash 驱动（单 bank 型号：F401/F405/F407/F411/F415/F417）
  *
- * F4 的 Flash 有两个容易踩的点：
+ * 两个容易踩的点：
  *   1. 扇区大小不等长：S0-S3 各 16KB、S4 为 64KB、S5 及以上各 128KB。
- *      擦除时必须按实际扇区大小推进，不能按固定值步进。
- *   2. 编程粒度为 32 位字，且地址必须 4 字节对齐。
- *      长度不足 4 字节的尾巴要做「读-改-写」。
+ *      擦除必须按实际扇区大小推进，不能按固定值步进。
+ *   2. 编程粒度为 32 位字且地址必须 4 字节对齐，长度不足 4 字节的
+ *      尾巴要做「读-改-写」。
+ *
+ * 扇区表不硬编码：F4 全系遵循同一条布局规则，按地址算即可 ——
+ * 同一份驱动就能同时服务 512KB 的 F401 与 1MB 的 F405，
+ * 换容量只需要改 bl_config.h 里的 BL_FLASH_SIZE。
+ *
+ * 适用边界：本规则适用于 1MB 及以下的单 bank 器件。
+ * F42x/F43x（2MB、双 bank）扇区划分不同，需另写一份 target 适配。
  */
+#include "bl_config.h"          /* 必须最先：芯片参数 */
+
 #include <cstring>
 
 #include "stm32f4xx_hal.h"
-#include "bl_port.hpp"
-#include "bl_log.hpp"
-#include "bl_config.h"
+
+#include "port/bl_port.hpp"
+#include "core/bl_log.hpp"
 
 namespace bl {
-
-/* ========================================================================
- * 扇区表
- * ======================================================================*/
 namespace {
 
-struct SectorDesc {
-    uint32_t base;
-    uint32_t size;
-    uint32_t hal_id;   ///< HAL 的 FLASH_SECTOR_x
-};
+/* ============================================================================
+ * F4 扇区布局规则
+ *
+ *   偏移 0     - 64KB  : S0..S3，每扇区 16KB
+ *   偏移 64KB  - 128KB : S4，单扇区 64KB
+ *   偏移 128KB - 末尾  : S5..，每扇区 128KB
+ * ==========================================================================*/
+constexpr uint32_t kSmallSize  = 16U * 1024U;
+constexpr uint32_t kSmallCount = 4U;
+constexpr uint32_t kMidSize    = 64U * 1024U;
+constexpr uint32_t kLargeSize  = 128U * 1024U;
 
-/* 1MB 共 12 个扇区；地址范围 0x08000000 - 0x080FFFFF */
-constexpr SectorDesc kSectors[] = {
-    { 0x08000000UL,  16UL * 1024UL, FLASH_SECTOR_0  },
-    { 0x08004000UL,  16UL * 1024UL, FLASH_SECTOR_1  },
-    { 0x08008000UL,  16UL * 1024UL, FLASH_SECTOR_2  },
-    { 0x0800C000UL,  16UL * 1024UL, FLASH_SECTOR_3  },
-    { 0x08010000UL,  64UL * 1024UL, FLASH_SECTOR_4  },
-    { 0x08020000UL, 128UL * 1024UL, FLASH_SECTOR_5  },
-    { 0x08040000UL, 128UL * 1024UL, FLASH_SECTOR_6  },
-    { 0x08060000UL, 128UL * 1024UL, FLASH_SECTOR_7  },
-    { 0x08080000UL, 128UL * 1024UL, FLASH_SECTOR_8  },
-    { 0x080A0000UL, 128UL * 1024UL, FLASH_SECTOR_9  },
-    { 0x080C0000UL, 128UL * 1024UL, FLASH_SECTOR_10 },
-    { 0x080E0000UL, 128UL * 1024UL, FLASH_SECTOR_11 },
-};
+constexpr uint32_t kMidBase   = kSmallCount * kSmallSize;    /* 64KB  */
+constexpr uint32_t kLargeBase = kMidBase + kMidSize;         /* 128KB */
 
-constexpr uint32_t kSectorCount = sizeof(kSectors) / sizeof(kSectors[0]);
+/** 全片扇区个数 = 5 + (容量 - 128KB) / 128KB。512KB→8，1MB→12 */
+constexpr uint32_t kSectorCount =
+    5U + (BL_FLASH_SIZE - kLargeBase) / kLargeSize;
 
-/// 地址落在哪个扇区；返回 -1 表示越界
-int sector_of(uint32_t addr) noexcept
+static_assert(BL_FLASH_SIZE >= (256U * 1024U),
+              "BL_FLASH_SIZE 太小：F4 至少要 256KB 才放得下 16KB Bootloader + 配置区");
+
+/** 地址是否落在本片 Flash 内 */
+constexpr bool in_flash(uint32_t addr) noexcept
 {
-    for (uint32_t i = 0; i < kSectorCount; ++i) {
-        if (addr >= kSectors[i].base &&
-            addr <  (kSectors[i].base + kSectors[i].size)) {
-            return static_cast<int>(i);
-        }
-    }
-    return -1;
+    return addr >= BL_FLASH_BASE && addr < (BL_FLASH_BASE + BL_FLASH_SIZE);
+}
+
+/** 地址所属扇区序号；越界时返回值 >= kSectorCount */
+constexpr uint32_t sector_index(uint32_t addr) noexcept
+{
+    const uint32_t off = addr - BL_FLASH_BASE;
+    return (off < kMidBase)   ? (off / kSmallSize) :
+           (off < kLargeBase) ? kSmallCount :
+           (kSmallCount + 1U + (off - kLargeBase) / kLargeSize);
+}
+
+/** 扇区起始地址 */
+constexpr uint32_t sector_base(uint32_t idx) noexcept
+{
+    return (idx < kSmallCount)  ? (BL_FLASH_BASE + idx * kSmallSize) :
+           (idx == kSmallCount) ? (BL_FLASH_BASE + kMidBase) :
+           (BL_FLASH_BASE + kLargeBase + (idx - kSmallCount - 1U) * kLargeSize);
+}
+
+/** 扇区大小 */
+constexpr uint32_t sector_size(uint32_t idx) noexcept
+{
+    return (idx < kSmallCount)  ? kSmallSize :
+           (idx == kSmallCount) ? kMidSize : kLargeSize;
 }
 
 } // namespace
 
-/* ========================================================================
+/* ============================================================================
  * 初始化
- * ======================================================================*/
+ * ==========================================================================*/
 Status flash_init() noexcept
 {
-    /* F4 的 Flash 接口时钟由 HAL_Init 打开，此处只需确保处于锁定态 */
+    /* F4 的 Flash 接口时钟由 HAL_Init 打开，这里只需确保处于锁定态 */
     HAL_FLASH_Lock();
     return Status::Ok;
 }
 
 uint32_t flash_sector_size(uint32_t addr) noexcept
 {
-    const int i = sector_of(addr);
-    return (i < 0) ? 0U : kSectors[i].size;
+    if (!in_flash(addr)) {
+        return 0U;
+    }
+    const uint32_t idx = sector_index(addr);
+    return (idx < kSectorCount) ? sector_size(idx) : 0U;
 }
 
 uint32_t flash_bytes_to_sector_end(uint32_t addr) noexcept
 {
-    const int i = sector_of(addr);
-    if (i < 0) {
+    if (!in_flash(addr)) {
         return 0U;
     }
-    return (kSectors[i].base + kSectors[i].size) - addr;
+    const uint32_t idx = sector_index(addr);
+    if (idx >= kSectorCount) {
+        return 0U;
+    }
+    return (sector_base(idx) + sector_size(idx)) - addr;
 }
 
-/* ========================================================================
+/* ============================================================================
  * 擦除
  *
- * core 层保证 addr 落在扇区起始、len 为扇区大小之和，
- * 但仍做合法性检查，避免误擦到 Bootloader 自身所在的 S0。
- * ======================================================================*/
+ * core 层已保证 addr 落在扇区起始、len 是若干扇区之和；这里仍做独立校验，
+ * 并额外拒绝擦除 Bootloader 自身 —— 就算上层逻辑写出 bug，
+ * 也不可能把「重刷入口」擦掉。
+ * ==========================================================================*/
 Status flash_erase(uint32_t addr, uint32_t len) noexcept
 {
     if (len == 0U) {
         return Status::Ok;
     }
 
-    /* 安全检查：绝不擦除 Bootloader 自身区域 */
     if (addr < (BL_BOOT_BASE + BL_BOOT_SIZE)) {
         BL_LOG("[flash] refuse to erase bootloader region\r\n");
         return Status::BadParam;
     }
-
-    const int first = sector_of(addr);
-    if (first < 0) {
+    if (!in_flash(addr) || !in_flash(addr + len - 1U)) {
+        BL_LOG("[flash] erase out of flash range: 0x%08lX +%lu\r\n",
+               static_cast<unsigned long>(addr),
+               static_cast<unsigned long>(len));
         return Status::BadParam;
     }
 
-    /* 统计本次覆盖的扇区个数（要求 addr 落在扇区起点） */
+    const uint32_t first = sector_index(addr);
+    if (first >= kSectorCount || addr != sector_base(first)) {
+        BL_LOG("[flash] erase addr not sector-aligned: 0x%08lX\r\n",
+               static_cast<unsigned long>(addr));
+        return Status::BadParam;
+    }
+
+    /* 沿扇区边界走完整个区间，确认 len 正好由整数个扇区构成 */
     uint32_t remaining = len;
     uint32_t count     = 0;
     uint32_t cur       = addr;
     while (remaining > 0U) {
-        const int idx = sector_of(cur);
-        if (idx < 0) {
+        const uint32_t idx = sector_index(cur);
+        if (idx >= kSectorCount || cur != sector_base(idx)) {
+            BL_LOG("[flash] erase len not sector-multiple\r\n");
             return Status::BadParam;
         }
-        if (cur != kSectors[idx].base) {
-            BL_LOG("[flash] erase addr not sector-aligned: 0x%08lX\r\n",
-                   static_cast<unsigned long>(cur));
-            return Status::BadParam;
-        }
-        const uint32_t sz = kSectors[idx].size;
+        const uint32_t sz = sector_size(idx);
         if (remaining < sz) {
             BL_LOG("[flash] erase len not sector-multiple\r\n");
             return Status::BadParam;
@@ -136,8 +167,8 @@ Status flash_erase(uint32_t addr, uint32_t len) noexcept
 
     FLASH_EraseInitTypeDef erase{};
     erase.TypeErase    = FLASH_TYPEERASE_SECTORS;
-    erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;   /* 2.7V - 3.6V */
-    erase.Sector       = kSectors[first].hal_id;
+    erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;      /* 2.7V - 3.6V */
+    erase.Sector       = first;
     erase.NbSectors    = count;
 
     uint32_t sector_error = 0;
@@ -154,13 +185,13 @@ Status flash_erase(uint32_t addr, uint32_t len) noexcept
     return Status::Ok;
 }
 
-/* ========================================================================
+/* ============================================================================
  * 写入
  *
- * F4 编程单位为 32 位字。正常路径下 core 传入的地址与长度都是 4 的倍数
+ * F4 编程单位是 32 位字。正常路径下 core 传入的地址与长度都是 4 的倍数
  * （YMODEM 数据区天然对齐、配置区槽为 64 字节），但这里仍处理尾巴不足
- * 一个字的情况，采用「读出原字 → 合并 → 写回」。
- * ======================================================================*/
+ * 一个字的情况：读出原字 → 合并 → 写回。
+ * ==========================================================================*/
 Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept
 {
     if (data == nullptr || len == 0U) {
@@ -172,7 +203,7 @@ Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept
         return Status::BadParam;
     }
 
-    const auto* src = static_cast<const uint8_t*>(data);
+    const auto*    src = static_cast<const uint8_t*>(data);
     const uint32_t end = addr + len;
 
     HAL_FLASH_Unlock();
@@ -180,9 +211,9 @@ Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept
     while (addr < end) {
         wdg_feed();
 
-        const uint32_t remain = end - addr;
-        uint32_t word = 0;
-        uint32_t consumed = 4U;
+        const uint32_t remain   = end - addr;
+        uint32_t       word     = 0;
+        uint32_t       consumed = 4U;
 
         if (remain >= 4U) {
             std::memcpy(&word, src, 4);
@@ -213,9 +244,9 @@ Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept
     return Status::Ok;
 }
 
-/* ========================================================================
- * 读取（内存映射，直接拷贝即可）
- * ======================================================================*/
+/* ============================================================================
+ * 读取（Flash 内存映射，直接拷贝）
+ * ==========================================================================*/
 Status flash_read(uint32_t addr, void* buf, uint32_t len) noexcept
 {
     if (buf == nullptr || len == 0U) {

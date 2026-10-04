@@ -2,11 +2,12 @@
  * @file    bl_port_system_stm32f4.cpp
  * @brief   STM32F4 系统控制：跳转、看门狗、时基、复位
  */
-#include "stm32f4xx_hal.h"
-#include "usart.h"
-#include "bl_port.hpp"
-#include "bl_log.hpp"
-#include "bl_config.h"
+#include "bl_config.h"          /* 必须最先 */
+
+#include "target/stm32f4/bl_target_internal.hpp"
+
+#include "port/bl_port.hpp"
+#include "core/bl_log.hpp"
 
 namespace bl {
 
@@ -14,12 +15,12 @@ namespace bl {
  * 跳转到 APP
  *
  * 八个步骤缺一不可，顺序也不能乱。漏掉哪一步的典型症状：
- *   - 不停 SysTick      → APP 里 HAL_Delay 走时不对
- *   - 不复位 RCC        → APP 以为时钟还是 Bootloader 配的，串口波特率全错
+ *   - 不停 SysTick       → APP 里 HAL_Delay 走时不对
+ *   - 不复位 RCC         → APP 以为时钟还是 Bootloader 配的，串口波特率全错
  *   - 不清 NVIC 挂起标志 → APP 一开中断就冲进某个已挂起的中断服务函数
- *   - 不设 VTOR         → APP 的中断跳到 Bootloader 的向量表里
- *   - 不设 MSP          → 栈指针还停在 Bootloader 的栈上，APP 一压栈就踩坏数据
- *   - 不清 CONTROL      → 若此前用过 PSP，APP 会在错误的栈上运行
+ *   - 不设 VTOR          → APP 的中断跳到 Bootloader 的向量表里
+ *   - 不设 MSP           → 栈指针还停在 Bootloader 的栈上，一压栈就踩坏数据
+ *   - 不清 CONTROL       → 若此前用过 PSP，APP 会在错误的栈上运行
  * ======================================================================*/
 void jump_to_app(uint32_t app_base) noexcept
 {
@@ -40,7 +41,7 @@ void jump_to_app(uint32_t app_base) noexcept
     SysTick->VAL  = 0U;
 
     /* 3. 复位 RCC 到默认态（HSI）。
-     *    APP 的 SystemInit 会按自己的配置重新建立 PLL。 */
+     *    APP 的 SystemInit 会按自己的配置重建 PLL。 */
     HAL_RCC_DeInit();
 
     /* 4. 清所有 NVIC 中断使能与挂起标志 */
@@ -73,19 +74,17 @@ void jump_to_app(uint32_t app_base) noexcept
 /* ========================================================================
  * 看门狗
  *
- * 这里直接用寄存器操作 IWDG，不走 HAL。原因：
- *   - 本工程的 CubeMX 配置里没有启用 HAL_IWDG_MODULE_ENABLED，
- *     HAL 的 iwdg 源文件也没被生成；
- *   - IWDG 总共只有 4 个寄存器、3 个键值，直接操作更直观；
- *   - 省下一个 HAL 模块的 ROM 占用（bootloader 只有 16KB 可用）。
+ * 直接用寄存器操作 IWDG，不走 HAL。原因：
+ *   - 本工程的 HAL 配置里没有启用 HAL_IWDG_MODULE_ENABLED，
+ *     HAL 的 iwdg 源文件也就没被生成；
+ *   - IWDG 只有 4 个寄存器、3 个键值，直接操作更直观；
+ *   - 省下一个 HAL 模块的 ROM 占用（Bootloader 只有 16KB 可用）。
  *
- * 提醒：IWDG 一旦启动就无法停止（只能靠复位），
- * 因此启用后 APP 也必须持续喂狗。
- * 默认由 BL_USE_WATCHDOG 关闭；开启前请确认 APP 侧已实现喂狗，
- * 否则 APP 会在超时后被反复复位。
+ * 提醒：IWDG 一旦启动就无法停止（只能靠复位），因此启用后 APP 也必须
+ * 持续喂狗，否则 APP 会被反复复位。由 BL_USE_WATCHDOG 控制开关。
  *
- * 超时按约 2 秒设置：F4 擦除一个 128KB 扇区典型 1 秒、最大 4 秒，
- * 擦除循环内部会喂狗，故 2 秒足够。
+ * 超时值取 BL_WATCHDOG_TIMEOUT_MS：它必须大于「中间没机会喂狗的最长阻塞」，
+ * 也就是一次整扇区擦除（128KB 最坏 4 秒）。默认给 6 秒。
  * ======================================================================*/
 namespace {
 
@@ -99,14 +98,23 @@ struct IwdgRegs {
 
 constexpr uint32_t kIwdgBase = 0x40003000UL;
 
-/* KR 写入的四个键值 */
+/* KR 的三个键值 */
 constexpr uint16_t kKeyReload      = 0xAAAAU;   ///< 重载计数器（喂狗）
 constexpr uint16_t kKeyEnable      = 0xCCCCU;   ///< 启动看门狗
 constexpr uint16_t kKeyWriteEnable = 0x5555U;   ///< 允许改写 PR/RLR
 
-/* LSI 约 32kHz，分频 64 → 500Hz，重载 1000 → 约 2 秒 */
-constexpr uint32_t kPrescalerDiv64 = 4U;        ///< PR=4 对应 64 分频
-constexpr uint32_t kReloadValue    = 1000U;
+/* LSI 约 32kHz，PR=4 对应 64 分频 → 计数器 500 Hz，即每 2ms 加一 */
+constexpr uint32_t kPrescalerDiv64 = 4U;
+constexpr uint32_t kTickHz         = 500U;
+
+/* 重载值 = 超时(ms) × 500 / 1000；寄存器只有 12 位，上限 4095 */
+constexpr uint32_t kReloadRaw = BL_WATCHDOG_TIMEOUT_MS * kTickHz / 1000U;
+constexpr uint32_t kReloadValue = (kReloadRaw > 4095U) ? 4095U : kReloadRaw;
+
+static_assert(BL_WATCHDOG_TIMEOUT_MS >= 100U, "BL_WATCHDOG_TIMEOUT_MS 太小，没有意义");
+static_assert(kReloadRaw <= 4095U,
+              "BL_WATCHDOG_TIMEOUT_MS 超过 IWDG 上限（500Hz 下最长约 8.19 秒），"
+              "请改小或调整 kPrescalerDiv64 并同步修改 kTickHz");
 
 inline IwdgRegs& iwdg() noexcept
 {
@@ -163,10 +171,8 @@ void delay_ms(uint32_t ms) noexcept
  * ======================================================================*/
 void system_reset() noexcept
 {
-    /* 等串口发送完，避免最后几行日志丢失 */
-    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET) {
-        /* 不喂狗：此处应尽快复位 */
-    }
+    /* 等串口把最后几行日志发完再复位，否则调试时总会缺半行 */
+    stm32f4::console_tx_flush(100U);
 
     NVIC_SystemReset();
 

@@ -2,9 +2,9 @@
  * @file    bl_crc.cpp
  * @brief   CRC16/XMODEM 与 CRC32/ISO-HDLC 实现
  */
-#include "bl_crc.hpp"
+#include "core/bl_crc.hpp"
 #include "bl_config.h"
-#include "bl_port.hpp"
+#include "port/bl_port.hpp"
 
 namespace bl {
 

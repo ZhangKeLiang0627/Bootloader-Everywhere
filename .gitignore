@@ -58,3 +58,7 @@ dkms.conf
 MDK-ARM/LUMOS-bootloader
 
 MDK-ARM/LUMOS-bootloader.uvguix.*
+
+# LUMOS-bootloader 命令行构建产物（tools/build.py 输出）
+/build/
+*.bin

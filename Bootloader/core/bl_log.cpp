@@ -4,8 +4,8 @@
  */
 #include <cstdarg>
 
-#include "bl_log.hpp"
-#include "bl_port.hpp"
+#include "core/bl_log.hpp"
+#include "port/bl_port.hpp"
 #include "bl_config.h"
 
 namespace bl {

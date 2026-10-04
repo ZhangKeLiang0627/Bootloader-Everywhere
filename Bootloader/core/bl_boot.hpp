@@ -17,7 +17,7 @@
 #ifndef BL_BOOT_HPP
 #define BL_BOOT_HPP
 
-#include "bl_types.hpp"
+#include "core/bl_types.hpp"
 #include "bl_config.h"
 
 namespace bl {
