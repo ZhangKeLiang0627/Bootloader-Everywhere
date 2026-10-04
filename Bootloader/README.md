@@ -20,23 +20,24 @@ Bootloader/
 ├── README.md                 本文档
 ├── config/
 │   └── bl_config.h           ★ 分区地址、功能开关（移植时改这里）
-├── core/                     平台无关逻辑（移植时不动）
-│   ├── bl_types.h            公共类型与错误码
-│   ├── bl_crc.c/.h           CRC16（YMODEM 用）与 CRC32（镜像校验）
-│   ├── bl_meta.c/.h          配置区：固件状态机、日志式槽位读写
-│   ├── bl_verify.c/.h        镜像合法性检查（向量表 + CRC32）
-│   ├── bl_ymodem.c/.h        YMODEM-1K 接收状态机
-│   ├── bl_session.c/.h       升级会话：原子提交流程编排
-│   └── bl_boot.c/.h          上电启动决策
+├── core/                     平台无关逻辑（C++，移植时不动）
+│   ├── bl_types.hpp          公共类型：Status / FwState / IapResult
+│   ├── bl_crc.hpp/.cpp       Crc16（YMODEM 用）与 Crc32（镜像校验）
+│   ├── bl_meta.hpp/.cpp      配置区：固件状态机、日志式槽位读写
+│   ├── bl_verify.hpp/.cpp    镜像合法性检查（向量表 + CRC32）
+│   ├── bl_ymodem.hpp/.cpp    YMODEM-1K 接收端
+│   ├── bl_session.hpp/.cpp   升级会话：原子提交流程编排
+│   └── bl_boot.hpp/.cpp      上电启动决策
 ├── port/
-│   ├── bl_port.h             ★ 移植接口定义（新平台实现这组函数）
-│   └── bl_port_template.c    移植模板（照抄填空即可）
+│   ├── bl_port.hpp           ★ 移植接口定义（新平台实现这组函数）
+│   └── bl_port_template.cpp  移植模板（填空参考，勿加入编译）
 ├── target/
 │   └── stm32f4/              本工程目标平台
-│       ├── bl_port_flash_stm32f4.c
-│       ├── bl_port_uart_stm32f4.c
-│       └── bl_port_system_stm32f4.c
+│       ├── bl_port_flash_stm32f4.cpp
+│       ├── bl_port_uart_stm32f4.cpp
+│       └── bl_port_system_stm32f4.cpp
 └── app/
+    └── bl_main.cpp           入口与 IAP 主循环
     └── bl_main.c             Bootloader 主流程
 ```
 
@@ -192,3 +193,47 @@ A/B 双分区虽是业界最主流的防变砖方案，但需要两份完整 APP
 
 APP 侧工程需把 Keil 的 IROM1 起始地址改为 `0x08004000`、大小 `0xDC000`，
 并在 `main()` 最开始调用 `SCB->VTOR = 0x08004000;`（或使用 `VECT_TAB_OFFSET`）。
+
+---
+
+## 编译环境
+
+本工程用 C++ 编写，目标编译环境（已从工程文件确认）：
+
+| 项 | 值 |
+|---|---|
+| 编译器 | ARM Compiler 6（AC6） |
+| C++ 标准 | C++14 |
+| RTTI | 已关闭 |
+| 异常 | **建议关闭**（`-fno-exceptions`），省 ROM 且与代码风格一致 |
+
+代码风格约定：`enum class` 强类型、`constexpr`、`static_assert`；
+**不使用**异常、动态内存、RTTI、STL 容器。
+
+## Keil 工程挂载步骤
+
+1. 把 `core/`、`port/bl_port.hpp`、`target/stm32f4/`、`app/` 下的
+   `*.cpp` 与 `*.hpp` 加入工程（**`bl_port_template.cpp` 不要加入**，
+   它只是移植参考，会与 target 实现产生重复符号）。
+2. Include 路径加上：`..\Bootloader\config`、`..\Bootloader\core`、
+   `..\Bootloader\port`、`..\Bootloader\target\stm32f4`、`..\Bootloader\app`。
+3. Target 页把 **IROM1 改为 `0x08000000` / `0x4000`**（16KB）。
+4. Options → C/C++ → 勾选 **No Exceptions**。
+5. **把 `UserApp/main.cpp` 从编译中移除**——原骨架里也定义了 `Main()`，
+   与 `app/bl_main.cpp` 会重复符号。
+6. 编译后查 `.map`，确认 **ROM 占用 < 16KB**。
+
+## 一个设计决策：CRC32 由板子自己算
+
+YMODEM 首包只带文件名和大小，不带整镜像 CRC32。本实现**不让上位机下发 CRC**，
+而是由 Bootloader 在接收过程中自行计算并写入配置区。
+
+理由：
+
+- YMODEM 的**帧级 CRC16 + ACK/NAK 已经保证**了「PC → 板子」的传输正确性，这是协议本职；
+- **整镜像 CRC32 的职责是防 Flash 位翻转 / 擦写不完整**，属于「本端自检」，
+  只需算一次存下来，以后每次启动重算比对即可；
+- 于是不需要约定「上位机用什么口径算 CRC」，**标准 YMODEM 工具（SecureCRT 等）
+  无需任何改造就能用**；
+- 也彻底避开了「末包填充字节是否计入 CRC」这类陷阱
+  （不同工具的填充值可能是 `0x00` / `0x1A` / `0xFF`，详见 `bl_verify.cpp` 注释）。
