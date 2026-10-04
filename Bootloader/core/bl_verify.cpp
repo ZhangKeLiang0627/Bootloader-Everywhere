@@ -5,6 +5,7 @@
 #include "bl_verify.hpp"
 #include "bl_crc.hpp"
 #include "bl_port.hpp"
+#include "bl_log.hpp"
 #include "bl_config.h"
 
 namespace bl {

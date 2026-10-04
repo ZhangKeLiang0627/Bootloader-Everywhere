@@ -12,6 +12,7 @@
 
 #include "stm32f4xx_hal.h"
 #include "bl_port.hpp"
+#include "bl_log.hpp"
 #include "bl_config.h"
 
 namespace bl {

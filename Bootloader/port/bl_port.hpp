@@ -86,8 +86,6 @@ Status uart_write(const uint8_t* buf, uint32_t len) noexcept;
 /// 清空接收缓冲（进入 IAP 前调用，丢弃遗留数据）
 void uart_flush_rx() noexcept;
 
-/// 调试格式化输出（仅在 BL_DEBUG_LOG 打开时被调用）
-void log_printf(const char* fmt, ...) noexcept;
 
 /* ========================================================================
  * 系统控制
@@ -118,6 +116,14 @@ void wdg_feed() noexcept;
 
 /// 获取系统毫秒时基（上电起累计）
 uint32_t tick_ms() noexcept;
+
+/**
+ * @brief 毫秒级延时
+ *
+ * 之所以不直接在 app 层调用平台的 HAL_Delay：app/core 层必须保持
+ * 平台无关，否则「换芯片只改 target」这条约定就破了。
+ */
+void delay_ms(uint32_t ms) noexcept;
 
 /// 触发系统复位（升级完成后重启）
 [[noreturn]] void system_reset() noexcept;

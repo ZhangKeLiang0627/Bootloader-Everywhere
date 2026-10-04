@@ -7,9 +7,6 @@
  * 换来的是行为可预测、无中断竞态。
  * 若将来需要提速到 921600，可改为「中断 + 环形缓冲」或 DMA。
  */
-#include <cstdarg>
-#include <cstdio>
-
 #include "stm32f4xx_hal.h"
 #include "usart.h"
 #include "bl_port.hpp"
@@ -154,33 +151,6 @@ void uart_flush_rx() noexcept
     while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) != RESET && guard++ < 4096U) {
         (void)huart1.Instance->DR;
     }
-}
-
-/* ========================================================================
- * 调试输出
- *
- * 用 vsnprintf 而非 printf：不引入完整 stdio 的重型依赖，
- * 在 -O2 下通常只占几百字节，远小于链接 printf 的代价。
- * ======================================================================*/
-void log_printf(const char* fmt, ...) noexcept
-{
-#if BL_DEBUG_LOG
-    char line[160];
-
-    va_list ap;
-    va_start(ap, fmt);
-    const int n = std::vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
-
-    if (n > 0) {
-        const uint32_t len = (static_cast<uint32_t>(n) < sizeof(line))
-                                 ? static_cast<uint32_t>(n)
-                                 : static_cast<uint32_t>(sizeof(line) - 1U);
-        (void)uart_write(reinterpret_cast<const uint8_t*>(line), len);
-    }
-#else
-    (void)fmt;
-#endif
 }
 
 } // namespace bl

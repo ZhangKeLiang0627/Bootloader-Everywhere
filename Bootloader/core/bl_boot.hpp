@@ -47,8 +47,12 @@ public:
      *
      * 内部会读写配置区（递增启动计数、作废固件等）。
      * 调用前应先完成 Meta::init()。
+     *
+     * 拆成两个重载而非使用默认实参 Config{}：参见 bl_ymodem.hpp 中的说明
+     * （类的默认实参不在 complete-class context 中）。
      */
-    static Decision decide(const Config& cfg = Config{}) noexcept;
+    static Decision decide() noexcept;
+    static Decision decide(const Config& cfg) noexcept;
 
     /**
      * @brief 在时间窗内监听 Backdoor 字符

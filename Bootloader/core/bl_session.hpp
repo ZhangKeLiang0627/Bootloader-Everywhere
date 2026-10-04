@@ -23,6 +23,7 @@
 #define BL_SESSION_HPP
 
 #include "bl_ymodem.hpp"
+#include "bl_crc.hpp"
 
 namespace bl {
 
@@ -48,8 +49,14 @@ public:
      * 注意：构造函数把 *this 交给 Ymodem 保存为 YmodemSink 引用。
      * 此时 Session 的 vtable 尚未建立，但 Ymodem 构造期不会调用 sink 的
      * 虚函数，因此安全；后续 receive() 调用时才发生动态绑定。
+     *
+     * 拆成两个重载而非默认实参 Config{}：参见 bl_ymodem.hpp 中的说明
+     * （类的默认实参不在 complete-class context 中）。
      */
-    explicit Session(const Config& cfg = Config{}) noexcept
+    Session() noexcept
+        : Session(Config{}) {}
+
+    explicit Session(const Config& cfg) noexcept
         : cfg_(cfg), ymodem_(*this, cfg.ymodem) {}
 
     /// 执行一次完整升级会话（阻塞直到结束）

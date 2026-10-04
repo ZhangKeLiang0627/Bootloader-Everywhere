@@ -6,6 +6,7 @@
 #include "bl_meta.hpp"
 #include "bl_verify.hpp"
 #include "bl_port.hpp"
+#include "bl_log.hpp"
 
 namespace bl {
 
@@ -41,6 +42,11 @@ bool Boot::wait_backdoor(uint32_t window_ms, uint8_t trigger) noexcept
 /* ========================================================================
  * 启动决策
  * ======================================================================*/
+Boot::Decision Boot::decide() noexcept
+{
+    return decide(Config{});
+}
+
 Boot::Decision Boot::decide(const Config& cfg) noexcept
 {
     Meta& m = meta();

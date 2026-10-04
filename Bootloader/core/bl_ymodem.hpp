@@ -102,7 +102,16 @@ public:
         Stats  stats;
     };
 
-    explicit Ymodem(YmodemSink& sink, const Config& cfg = Config{}) noexcept
+    /**
+     * 注意：这里不用「默认实参 Config{}」而拆成两个重载。
+     * 原因是 C++ 的一条限制——类的默认实参不处于 complete-class context，
+     * 而 Config 含默认成员初始化器，写 `= Config{}` 会编译报错
+     * （在类定义内部无法求值这些初始化器）。委托构造则没有这个问题。
+     */
+    explicit Ymodem(YmodemSink& sink) noexcept
+        : Ymodem(sink, Config{}) {}
+
+    Ymodem(YmodemSink& sink, const Config& cfg) noexcept
         : sink_(sink), cfg_(cfg) {}
 
     /**

@@ -119,17 +119,25 @@
  * 五、调试输出
  * ======================================================================*/
 
-/** 是否通过串口输出调试信息（注意：会占用 IAP 的串口带宽） */
+/**
+ * 是否通过串口输出调试信息
+ *
+ * 注意：打开时会引入格式化输出，是 ROM 占用的最大变量。
+ * 允许外部用 -DBL_DEBUG_LOG=0 覆盖，便于快速测量「发布版」的体积。
+ */
+#ifndef BL_DEBUG_LOG
 #define BL_DEBUG_LOG                1
+#endif
 
 /**
  * 调试输出宏
  *
- * 依赖 bl::log_printf（由 port 层实现）。
- * 使用本宏的 .cpp 文件需在使用点之前 #include "bl_port.hpp"。
+ * 走 core/bl_log 的自写轻量格式化，不依赖 stdio ——
+ * 实测链接 vsnprintf 会多带入约 6.5KB 的格式化与浮点库代码。
+ * 使用本宏的 .cpp 需在使用点之前 #include "bl_log.hpp"。
  */
 #if BL_DEBUG_LOG
-    #define BL_LOG(...)             do { bl::log_printf(__VA_ARGS__); } while (0)
+    #define BL_LOG(...)             do { ::bl::log::printf(__VA_ARGS__); } while (0)
 #else
     #define BL_LOG(...)             do { } while (0)
 #endif

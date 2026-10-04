@@ -10,6 +10,7 @@
  *   自检 → 装载配置区 → 启动决策 → 跳转 APP 或进入 IAP 循环
  */
 #include "bl_port.hpp"
+#include "bl_log.hpp"
 #include "bl_meta.hpp"
 #include "bl_crc.hpp"
 #include "bl_verify.hpp"
@@ -61,7 +62,7 @@ const char* outcome_name(IapResult r) noexcept
 extern "C" void Main(void)
 {
     /* ---- 0. 给外设和串口一点上电稳定时间 ---- */
-    HAL_Delay(50);
+    delay_ms(50);
 
     /* ---- 1. 串口（确保波特率与约定一致） ---- */
     if (!ok(uart_init(BL_UART_BAUDRATE))) {
@@ -131,11 +132,11 @@ extern "C" void Main(void)
             /* 升级成功。复位后由启动决策重新校验并跳转新固件，
              * 这样「跳转路径」只有一条，减少分叉。 */
             BL_LOG("[main] upgrade done, rebooting...\r\n");
-            HAL_Delay(300);
+            delay_ms(300);
             system_reset();
         }
 
         /* 失败：短暂停顿后重新进入等待，避免串口刷屏 */
-        HAL_Delay(200);
+        delay_ms(200);
     }
 }
