@@ -7,7 +7,7 @@
 ## 文件
 
 ```
-web/
+docs/
 ├── index.html      页面骨架
 ├── css/style.css   样式（浅色/深色自适应）
 └── js/
@@ -15,12 +15,15 @@ web/
     └── app.js      Web Serial 适配 + 界面逻辑
 ```
 
+> 目录名是 `docs/` 而非 `web/`：GitHub Pages 的 legacy source 只认根目录或
+> `/docs` 文件夹，用这个约定目录才能免 workflow 直接发布。
+
 ## 本地跑
 
 直接用静态服务器起一下即可（Web Serial 要求安全上下文，`localhost` 算安全）：
 
 ```bash
-cd web
+cd docs
 python -m http.server 8080
 # 然后浏览器打开 http://localhost:8080
 ```
@@ -32,7 +35,7 @@ python -m http.server 8080
 1. 仓库转 **public**（免费账户的私有仓库开不了 Pages）。
 2. Settings → Pages → Source 选 `Deploy from a branch`：
    - Branch：`web`
-   - Folder：`/web`
+   - Folder：`/docs`
 3. 保存后等一两分钟，页面地址形如
    `https://<user>.github.io/Bootloader-Everywhere/`。
 
