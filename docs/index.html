@@ -36,7 +36,6 @@
     <div class="row">
       <button id="btnConnect" class="primary">连接串口</button>
       <button id="btnDisconnect" disabled>断开</button>
-      <button id="btnBoot" disabled class="ghost">进入 Bootloader</button>
     </div>
   </section>
 
@@ -44,7 +43,12 @@
     <div class="card-head">
       <h2><span class="num">2</span> 固件</h2>
     </div>
-    <input type="file" id="file" accept=".bin">
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="file" accept=".bin" hidden>
+      <div class="dz-icon" id="dzIcon">⇪</div>
+      <p class="dz-text" id="dzText">点击选择固件，或拖拽 .bin 文件到这里</p>
+      <p class="dz-file" id="dzFile"></p>
+    </div>
     <p class="hint">
       固件需编译到 <code>0x08004000</code> 起始 —— Bootloader 占用前 16&nbsp;KB，
       APP 的 IROM 起点与向量表偏移都要跟着对齐。
@@ -59,7 +63,8 @@
     <button id="btnSend" class="primary" disabled>开始升级</button>
     <div class="progress"><div class="bar" id="bar">0%</div></div>
     <p class="hint">
-      升级需要设备处于 IAP 状态。若 APP 正在运行，点「进入 Bootloader」把它唤回。
+      点「开始升级」会自动把设备唤回 Bootloader（无论它在跑 APP 还是已在 IAP），
+      然后开始传输，无需手动操作。
     </p>
   </section>
 

@@ -1,5 +1,5 @@
 /**
- * LUMOS-bootloader 网页上位机
+ * Bootloader-Everywhere 网页上位机
  *
  * 用 Web Serial API 直接操作串口，把编译好的 .bin 通过 YMODEM-1K
  * 发给开发板。整个页面是纯前端，没有任何后端依赖，可以直接挂
@@ -73,27 +73,9 @@ function setConnected(on) {
     $('btnConnect').disabled = on;
     $('btnDisconnect').disabled = !on;
     $('btnSend').disabled = !on || busy;
-    $('btnBoot').disabled = !on || busy;
     $('baud').disabled = on;
     $('status').textContent = on ? '已连接' : '未连接';
     $('status').className = 'badge ' + (on ? 'on' : 'off');
-}
-
-/**
- * 「进入 Bootloader」：向运行中的 APP 发送唤回指令。
- *
- * 协议：连续发 5 个 0x7F（DEL）。APP 侧检测到该序列后，写 RAM 标志
- * 并软件复位，Bootloader 上电看到标志即进入 IAP。
- * 用 5 个而非单个，是为了降低与数据流里的 0x7F 撞车的概率。
- */
-async function enterBoot() {
-    if (!writer) { log('请先连接串口', 'err'); return; }
-    log('发送「进入 Bootloader」指令 ...', 'step');
-    for (let i = 0; i < 5; i++) {
-        await writer.write(new Uint8Array([0x7F]));
-        await io.pump(25);
-    }
-    log('已发送。若设备运行的是支持该指令的 APP，会复位回到 Bootloader。', 'dim');
 }
 
 async function disconnect() {
@@ -156,6 +138,27 @@ function onProgress(done, total, kbps) {
     $('stat').textContent = `${done} / ${total} 字节　${kbps.toFixed(1)} KB/s`;
 }
 
+/**
+ * 唤回 Bootloader：向串口发 0x7F(DEL)。
+ *
+ * - 若设备在跑 APP：APP 的串口监听收到 0x7F 后写 RAM 标志并软复位，
+ *   Bootloader 上电看到标志即进 IAP。
+ * - 若设备已在 IAP：0x7F 被 Bootloader 的握手等待当作噪声忽略，无害。
+ *
+ * 连发 5 个：APP 主循环是 100ms 轮询，单发一个可能恰好落在轮询间隙被
+ * 丢弃，连发保证至少有一个被读到。
+ */
+async function wakeUpBootloader() {
+    log('唤回 Bootloader ...', 'step');
+    for (let i = 0; i < 5; i++) {
+        if (!writer) break;
+        try { await writer.write(new Uint8Array([0x7F])); } catch (_) { break; }
+        await io.pump(30);
+    }
+    // 等设备复位并进入 IAP（真正的等待由 sender.send() 的握手超时兜底）
+    await io.pump(400);
+}
+
 async function doSend() {
     const fileInput = $('file');
     const f = fileInput.files && fileInput.files[0];
@@ -171,6 +174,10 @@ async function doSend() {
         const fileData = new Uint8Array(await f.arrayBuffer());
         sender = new YmodemSender(io, { onLog: log, onProgress });
 
+        // 1. 自动唤回 Bootloader（无需用户再手动点「进入 Bootloader」）
+        await wakeUpBootloader();
+
+        // 2. 发送（send() 内部先等 'C' 握手，设备进 IAP 后自动开始）
         const ok = await sender.send(fileData, f.name);
 
         if (ok) {
@@ -187,7 +194,7 @@ async function doSend() {
     }
 }
 
-/** 只读取串口（不发送），用于观察板子输出、进 IAP 长按等 */
+/** 只读取串口（不发送），用于观察板子输出 */
 function startSniffer() {
     if (sender) return;
     sender = new YmodemSender(io, {
@@ -197,14 +204,64 @@ function startSniffer() {
     log('已开始监听串口输出（可直接观察板子日志）', 'dim');
 }
 
+// ------------------------------------------------------------ 文件选择
+
+function setupDropzone() {
+    const dz = $('dropzone');
+    const file = $('file');
+    const dzIcon = $('dzIcon');
+    const dzText = $('dzText');
+    const dzFile = $('dzFile');
+
+    function showFile(f) {
+        if (!f) {
+            dzIcon.textContent = '⇪';
+            dzText.textContent = '点击选择固件，或拖拽 .bin 文件到这里';
+            dzFile.textContent = '';
+            return;
+        }
+        const kb = f.size / 1024;
+        const sizeStr = kb >= 1024 ? (kb / 1024).toFixed(2) + ' MB'
+                                   : kb.toFixed(1) + ' KB';
+        dzIcon.textContent = '✓';
+        dzText.textContent = f.name;
+        dzFile.textContent = `${sizeStr} · ${f.size.toLocaleString()} 字节`;
+    }
+
+    dz.addEventListener('click', () => file.click());
+    file.addEventListener('change', () => showFile(file.files[0]));
+
+    dz.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dz.classList.add('dragover');
+    });
+    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+    dz.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dz.classList.remove('dragover');
+        const f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!f) return;
+        if (!f.name.toLowerCase().endsWith('.bin')) {
+            log('请选择 .bin 固件文件', 'warn');
+            return;
+        }
+        const dt = new DataTransfer();
+        dt.items.add(f);
+        file.files = dt.files;
+        showFile(f);
+        log(`已选择固件：${f.name}`, 'info');
+    });
+}
+
 // ------------------------------------------------------------------ 绑定
 
 window.addEventListener('DOMContentLoaded', () => {
     $('btnConnect').addEventListener('click', connect);
     $('btnDisconnect').addEventListener('click', disconnect);
     $('btnSend').addEventListener('click', doSend);
-    $('btnBoot').addEventListener('click', enterBoot);
     $('btnClear').addEventListener('click', clearLog);
+
+    setupDropzone();
 
     if (!('serial' in navigator)) {
         log('提示：当前浏览器不支持 Web Serial。请用 Chrome / Edge 打开，'
