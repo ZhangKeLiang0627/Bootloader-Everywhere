@@ -72,6 +72,18 @@ bl_status_t bl_port_flash_read(uint32_t addr, void *buf, uint32_t len);
 bl_status_t bl_port_uart_init(uint32_t baudrate);
 
 /**
+ * @brief 运行时修改串口波特率
+ *
+ * 当前 IAP 阶段固定使用 BL_UART_BAUDRATE（115200），本接口为预留能力：
+ * 将来若实现「握手阶段 115200、数据传输阶段切到 921600」的提速方案，
+ * 由会话层在双方约定时机调用本接口。
+ *
+ * 实现要求：切换过程中不得丢失已接收数据；切换后需清空收发 FIFO。
+ * 注意 PC 端必须同步切换，否则链路立即失步。
+ */
+bl_status_t bl_port_uart_set_baudrate(uint32_t baudrate);
+
+/**
  * @brief 读取数据（阻塞至读满或超时）
  * @param buf        接收缓冲
  * @param len        期望读取字节数
