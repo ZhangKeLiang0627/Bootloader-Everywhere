@@ -23,6 +23,20 @@
 /* APP 区基址 —— 必须与 bl_config.h 的 BL_APP_BASE 一致 */
 #define APP_BASE            0x08004000UL
 
+/* ========================================================================
+ * 故障注入开关（仅用于验证 Bootloader 的回滚机制）
+ *
+ *   0 = 正常
+ *   1 = 故意不喂狗：IWDG 超时后把 CPU 拉回 Bootloader。用来验证
+ *       「看门狗自确认」判据，以及连续失败后的自动回滚
+ *   2 = 一启动就触发 HardFault：验证崩溃路径
+ *
+ * 用 build_app.py 的 --fail N 编译出故障固件（app_fail.bin）。
+ * ======================================================================*/
+#ifndef APP_FAIL_MODE
+#define APP_FAIL_MODE       0
+#endif
+
 /* 启动阶段标记：写到 RAM 高位（远离栈与 ZI 区），
  * 用调试器读回来就能知道 APP 执行到了哪一步。
  * 串口不通时这是最可靠的诊断手段。 */
@@ -398,6 +412,26 @@ int main(void)
     uart_puts("\r\n");
     uart_puts("[app] UART 115200 8N1 ready\r\n");
     uart_puts("----------------------------\r\n");
+
+#if APP_FAIL_MODE == 1
+    /* 【故障注入 1】故意不喂狗。
+     * 主循环里没有 iwdg_feed()，所以 IWDG（6 秒）超时后会把 CPU 复位，
+     * Bootloader 由此看到 IWDGRSTF，判定这个固件跑不起来并逐步累加计数。
+     * 用于验证「看门狗自确认」判据与自动回滚。 */
+    uart_puts("[app] FAIL-MODE=1: watchdog will NOT be fed\r\n");
+    for (;;) {
+        /* 什么都不做，等看门狗出手 */
+    }
+#elif APP_FAIL_MODE == 2
+    /* 【故障注入 2】一启动就踩非法地址，触发 HardFault。
+     * 此时 CPU 会停在自己的 HardFault_Handler 里，同样不再喂狗，
+     * 最终仍由看门狗把控制权交回 Bootloader。 */
+    uart_puts("[app] FAIL-MODE=2: deliberate HardFault\r\n");
+    delay_ms(20U);
+    *(volatile uint32_t *)0xFFFFFFF0UL = 0xDEADBEEFUL;
+    for (;;) {
+    }
+#endif
 
     /* 主循环：每秒报一次存活，期间切成 100ms 小片逐片喂狗。
      * IWDG 超时 6 秒，但喂狗间隔做小些更稳（也便于将来加长任务）。 */

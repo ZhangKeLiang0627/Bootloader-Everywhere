@@ -62,10 +62,18 @@ def run(cmd, what):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(ROOT, "build", "app_test.bin"),
-                    help="输出的 .bin 路径")
+    ap.add_argument("--out", default=None,
+                    help="输出的 .bin 路径。默认 app_test.bin，"
+                         "故障固件为 app_fail<N>.bin")
+    ap.add_argument("--fail", type=int, default=0, choices=(0, 1, 2),
+                    help="故障注入（验证 Bootloader 回滚用）："
+                         "1 = 故意不喂狗；2 = 启动即 HardFault")
     ap.add_argument("--map", action="store_true", help="打印符号表摘要")
     args = ap.parse_args()
+
+    if args.out is None:
+        name = "app_test.bin" if args.fail == 0 else "app_fail%d.bin" % args.fail
+        args.out = os.path.join(ROOT, "build", name)
 
     for tool in (CC, AS, LD, FE):
         if not os.path.exists(tool):
@@ -78,6 +86,10 @@ def main():
 
     print("=" * 66)
     print("构建测试 APP  →  0x%08X + %d KB" % (APP_BASE, APP_SIZE // 1024))
+    if args.fail:
+        print("⚠ 故障注入模式 APP_FAIL_MODE=%d （%s）"
+              % (args.fail,
+                 "不喂狗，等看门狗" if args.fail == 1 else "启动即 HardFault"))
     print("=" * 66)
 
     # 1) 汇编启动文件
@@ -91,7 +103,8 @@ def main():
 
     # 2) 编译 C 源码
     obj_main = os.path.join(work, "app_main.o")
-    r = run([CC] + CFLAGS + [os.path.join(HERE, "app_main.c"), "-o", obj_main],
+    cflags = CFLAGS + ["-DAPP_FAIL_MODE=%d" % args.fail]
+    r = run([CC] + cflags + [os.path.join(HERE, "app_main.c"), "-o", obj_main],
             "armclang app_main.c")
     if r is None:
         return 1
