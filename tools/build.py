@@ -26,8 +26,8 @@ import tempfile
 # 路径推导：脚本位于 <repo>/Bootloader/tools/ 下
 # ---------------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
-PROJ = os.path.dirname(HERE)              # .../Bootloader   —— 库根目录
-ROOT = os.path.dirname(PROJ)              # .../LUMOS-bootloader —— 宿主工程根
+ROOT = os.path.dirname(HERE)                       # .../LUMOS-bootloader —— 宿主工程根
+PROJ = os.path.join(ROOT, 'Bootloader')            # .../Bootloader —— 库根目录
 
 KEIL = os.environ.get(
     'KEIL_ARMCLANG_BIN',
@@ -76,7 +76,7 @@ BOOT_REGION = 16 * 1024        # Bootloader 区 16KB（与 bl_config.h 一致）
 
 
 def includes() -> list:
-    """include 路径。库只需要 Bootloader/ 一个根 —— 内部一律 'core/xxx' 引用。"""
+    """include 路径。库自身只需要 Bootloader/ 一个根。"""
     return [
         '-I', PROJ,
         '-I', os.path.join(ROOT, 'Core', 'Inc'),
