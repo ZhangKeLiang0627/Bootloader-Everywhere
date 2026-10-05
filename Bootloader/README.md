@@ -63,29 +63,372 @@ int main(void) {
 
 ---
 
-## 上电后会发生什么
+## 执行流程（图解 + 核心代码）
+
+> 想读代码就从 **`bl.cpp` 的最末尾**开始 —— `main()` 在文件最后，它只有一句
+> `bl::bl_entry()`。下面按"复位之后实际发生的顺序"讲。
+
+### 全景：谁调用谁
 
 ```
-上电
- └─ 平台自检（时钟/串口/Flash）
-     └─ 分区布局检查  ── 不通过 ──► 停在报错（绝不做破坏性擦除）
-         └─ 读配置区，判断固件状态
-             ├─ Valid ──┐
-             │          ├─ 复位原因是「软件复位」？ ── 是 ──► 进限时窗口（15s）
-             │          │                                      等 YMODEM；超时跳回 APP
-             │          └─ 否 ──► 零等待，直接跳 APP
-             └─ Invalid / Download ──► 留在 IAP，无限等 YMODEM
+上电/复位
+ └─ 启动文件 startup_stm32f401xe.s
+     └─ SystemInit()                     HAL 的：时钟、FPU
+         └─ __main → main()              ★ bl.cpp 文件末尾
+             └─ bl_run()                 extern "C"，C / C++ 工程都能调
+                 └─ bl::bl_entry()       ★ 真正的入口（不返回）
+                     │
+                     ├─ ① 五项自检 ──────────── 任一失败 → fatal() 停住
+                     ├─ ② banner + dump ────── 打印芯片与分区（调试用）
+                     ├─ ③ layout_check() ───── 分区是否落在扇区边界
+                     ├─ ④ Boot::decide()      ★ 核心决策
+                     │    ├─ 不可跳转 ──────────────────► 进 ⑤ IAP 循环
+                     │    ├─ 软件复位 + Valid ──────────► 进 ⑤ IAP 循环（限时窗口）
+                     │    └─ 校验全过 ──► Boot::jump() ─► jump_to_app() 八步
+                     └─ ⑤ IAP 循环 Session::run()
+                            └─ 升级成功 ──► Boot::jump()（和上面同一条路）
 ```
+
+只有**一个地方**能让控制权交给 APP：`jump_to_app()`。其余所有路径要么停在
+`fatal()`，要么回到 IAP 循环 —— 这就是"不会跑飞"的结构性保证。
+
+---
+
+### ① 五项自检（`bl_entry()` 开头）
+
+```cpp
+[[noreturn]] void bl_entry() noexcept
+{
+    if (!ok(platform_init()))             fatal("platform init failed");
+    if (!ok(uart_init(BL_UART_BAUDRATE))) fatal("uart init failed");
+    if (!ok(flash_init()))                fatal("flash init failed");
+    if (!ok(crc_selftest()))              fatal("crc selftest failed (check poly/init)");
+    if (!ok(meta().init()))               fatal("meta init failed");
+
+    banner();
+    meta().dump();
+```
+
+| 自检 | 干什么 | 失败为什么直接停 |
+|---|---|---|
+| `platform_init()` | 时钟树、1ms 时基、串口引脚 | 时钟都不对，后面所有事都没意义 |
+| `uart_init()` | 8N1 串口 | 不能刷机、也打不出日志 |
+| `flash_init()` | 解锁 Flash、开接口时钟 | 擦写会静默失败 |
+| `crc_selftest()` | **自己验自己**：用已知数据算一遍 CRC16/CRC32，和期望值比 | CRC 实现错了（多项式/初值/位序），会导致"好固件被判成坏"或反过来 |
+| `meta().init()` | 扫描配置区，装载最新有效槽 | 读不出固件状态，无法决策 |
+
+`crc_selftest()` 值得单独说：**校验逻辑本身也要被校验**。它挡的是"校验器写错"
+这类最难发现的问题 —— 否则你会看到"固件明明没问题却一直被判 CRC 错"。
+
+---
+
+### ② 分区检查 `layout_check()`
+
+```cpp
+bool partition_aligned(const char* name, uint32_t base) noexcept
+{
+    const uint32_t unit = flash_sector_size(base);
+    if (unit == 0U) { /* 地址根本不在这颗芯片的 Flash 里 */ return false; }
+    if (flash_bytes_to_sector_end(base) != unit) {
+        // 到下一扇区边界的字节数 != 本扇区大小 ⇒ base 不在扇区起点上
+        return false;
+    }
+    return true;
+}
+
+bool layout_check() noexcept
+{
+    bool all = true;
+    if (!partition_aligned("BOOT", BL_BOOT_BASE)) all = false;
+    if (!partition_aligned("APP",  BL_APP_BASE))  all = false;
+    if (!partition_aligned("META", BL_META_BASE)) all = false;
+    return all;
+}
+```
+
+**为什么必须查**：Flash 只能整扇区擦除。分区基址若差一个字节，
+"擦 APP 区"就会把相邻区一起擦掉 —— 包括 Bootloader 自己。
+
+**特别之处**：检查不通过时，如果固件本身是可启动的，仍然放它跑：
+
+```cpp
+    if (!layout_check()) {
+        BL_LOG("[main] FATAL: partition layout invalid\r\n");
+        if (meta().should_boot()) {
+            Boot::jump(BL_APP_BASE);        // 分区地址配错 ≠ 固件坏，先让 APP 活下去
+        }
+        fatal("partition layout invalid");  // 否则停在报错，绝不进 IAP 做破坏性擦除
+    }
+```
+
+理由：读操作永远安全，写操作（擦除）才危险。能跑就先跑，不能跑就停着等人。
+
+---
+
+### ③ 决策 `Boot::decide()` —— 五级阶梯（核心）
+
+```cpp
+Boot::Decision Boot::decide(const Config& cfg) noexcept
+{
+    Meta& m = meta();
+
+    // 复位原因必须每次启动都读（read-and-clear），否则旧标志会累积到下次启动
+    const ResetCause cause = reset_cause();
+
+    // 1. 固件状态不可跳转 → 进 IAP
+    if (!m.should_boot()) {
+        return { Action::EnterIap, "no bootable firmware" };
+    }
+
+    // 2. 软件复位唤回：APP 运行中软复位，进限时升级窗口
+    if (cause == ResetCause::Software) {
+        return { Action::EnterIapTimed, "soft reset -> upgrade window" };
+    }
+
+    // 3. 向量表校验
+    if (!ok(verify_vector_table(cfg.app_base, nullptr))) {
+        return { Action::EnterIap, "invalid vector table" };
+    }
+
+    // 4. 整镜像 CRC32 校验（可选）
+    if (cfg.verify_crc_on_boot) {
+        const Meta::Slot& s = m.current();
+        if (!ok(verify_image(cfg.app_base, s.fw_size, s.fw_crc32, nullptr))) {
+            return { Action::EnterIap, "image crc mismatch" };
+        }
+    }
+
+    // 5. 全部通过 → 跳 APP
+    return { Action::JumpToApp, "ok" };
+}
+```
+
+`should_boot()` 的判据只有一条：
+
+```cpp
+bool should_boot() const noexcept { return bootable(meta_.state); }   // state == Valid
+```
+
+**五种现场情况分别走哪条路**（对着串口日志就能对号入座）：
+
+| 上电时的情况 | 命中第几条 | 串口会打印 | 结果 |
+|---|---|---|---|
+| 从没刷过固件（`Invalid`） | 1 | `decision: IAP (no bootable firmware)` | 停在 IAP，无限等刷机 |
+| 刷到一半掉电（`Download`） | 1 | 同上 | 停在 IAP，可重刷（**不变砖**） |
+| 正常跑着，用户按复位键 | 3、4 通过 | `reset cause = 2 (pin)` + `decision: JUMP (ok)` | **零等待**直接跳 APP |
+| APP 里收到唤回关键字后软复位 | 2 | `reset cause = 3 (sft)` + `decision: IAP_TIMED` | 进 15s 限时窗口 |
+| 固件区被擦掉半截（CRC 不符） | 4 | `decision: IAP (image crc mismatch)` | 停在 IAP，可重刷 |
+
+两个刻意的设计点：
+
+1. **顺序本身就是设计**。先判"能不能跳"，再判"要不要等上位机"，最后才做
+   昂贵的校验（CRC32 要读整片 APP 区）。能省的活不干。
+2. **第 2 条排在校验之前**。因为"有人按了升级"这件事的优先级高于"固件是否完好"
+   —— 反正马上就要覆盖它了，没必要先花时间校验旧固件。
+3. **`reset_cause()` 每次启动都要读**。`RCC_CSR` 里的复位标志是**累积**的，
+   只有读才清。若只在某个分支里读，标志会一直粘着，导致下次启动误判成"软件复位"。
+
+---
+
+### ④ 跳转到 APP：`Boot::jump()` → `jump_to_app()` 八步
+
+```cpp
+void Boot::jump(uint32_t app_base) noexcept
+{
+    BL_LOG("[boot] jumping to app @ 0x%08lX\r\n", static_cast<unsigned long>(app_base));
+    jump_to_app(app_base);              // 移植层的函数，正常不返回
+    BL_LOG("[boot] jump failed!\r\n");  // 只有跳转失败才会走到这
+}
+```
+
+真正干活的是移植层的 `jump_to_app()`。**八步的顺序不能乱，一步都不能少**：
+
+```cpp
+void jump_to_app(uint32_t app_base) noexcept
+{
+    stm32f4::console_tx_flush(100U);   /* 等最后几行日志发完再跳 */
+
+    /* 取向量表前两字：初始栈顶与复位入口 */
+    const uint32_t initial_sp = *reinterpret_cast<volatile uint32_t*>(app_base);
+    const uint32_t reset_vec  = *reinterpret_cast<volatile uint32_t*>(app_base + 4U);
+
+    BL_LOG("[jump] sp=0x%08lX entry=0x%08lX\r\n", ...);
+
+    /* 1. 关全局中断 */
+    __disable_irq();
+
+    /* 2. 复位 RCC 到默认态（HSI）。APP 的 SystemInit 会按自己的配置重建 PLL。
+     *    ⚠️ HAL_RCC_DeInit() 内部末尾会调 HAL_InitTick()，
+     *       也就是**重新把 SysTick 配成 1ms 并使能中断** ——
+     *       所以「关 SysTick」必须放在它后面！ */
+    HAL_RCC_DeInit();
+
+    /* 3. 关 SysTick 并清挂起位 */
+    SysTick->CTRL = 0U;
+    SysTick->LOAD = 0U;
+    SysTick->VAL  = 0U;
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
+
+    /* 4. 清所有 NVIC 中断使能与挂起标志 */
+    for (uint32_t i = 0; i < 8U; ++i) {
+        NVIC->ICER[i] = 0xFFFFFFFFU;
+        NVIC->ICPR[i] = 0xFFFFFFFFU;
+    }
+
+    /* 5. 重定位向量表到 APP，并保证对后续取指立即生效 */
+    SCB->VTOR = app_base;
+    __DSB();
+
+    /* 6. 设置主堆栈指针 */
+    __set_MSP(initial_sp);
+
+    /* 7. 回到特权级 + 使用 MSP（若此前用过 PSP） */
+    __set_CONTROL(0U);
+    __ISB();
+
+    /* 8. 开中断并跳转 */
+    __enable_irq();
+    using AppEntry = void (*)(void);
+    auto entry = reinterpret_cast<AppEntry>(reset_vec);
+    entry();                            // ← 控制权在这一行交给 APP
+
+    for (;;) { }                        // 正常不会到这
+}
+```
+
+**每一步漏掉会怎样**（这些症状都不好猜，所以别删）：
+
+| 步 | 动作 | 漏掉的症状 |
+|---|---|---|
+| 1 | `__disable_irq()` | 跳转途中被中断打断，跳到半路 |
+| 2 | `HAL_RCC_DeInit()` | APP 以为时钟还是 Bootloader 配的 → 串口波特率全错（乱码） |
+| 3 | 关 SysTick + 清挂起 | APP 一跑就被 SysTick 打断，而它的 `SysTick_Handler` 是空的（`B .`）→ **APP 完全不输出** |
+| 4 | 清 NVIC | APP 一开中断就冲进一个已挂起的中断服务函数 |
+| 5 | `SCB->VTOR` | APP 的中断打进 Bootloader 的向量表 |
+| 6 | `__set_MSP()` | 栈指针还指着 Bootloader 的栈，一压栈就踩坏数据 |
+| 7 | `__set_CONTROL(0)` | 若之前用过 PSP，APP 会在错误的栈上跑 |
+| 8 | 取 `reset_vec` 并调用 | —— 这一步才是真的跳过去 |
+
+三个容易踩的顺序/细节陷阱：
+
+- **第 2 步必须在第 3 步之前**（`HAL_RCC_DeInit()` 会把 SysTick 重新打开）。
+- **`SysTick` / `PendSV` 不在 NVIC 里**（它们是系统异常），
+  所以第 4 步那个"清 NVIC"的循环管不到它们，必须像第 3 步那样单独清挂起位。
+- **`__set_MSP` 之后要 `__ISB()`**，保证后面的取指用新栈。
+
+---
+
+### ⑤ 留在 IAP：一次升级的完整调用链
+
+```
+bl_entry()
+ └─ for (;;) {
+      BL_LOG("[main] waiting for YMODEM transfer...");
+      Session session;
+      session.run()                          ← ⑥ 会话（bl.cpp）
+        └─ ymodem_.receive()                 ← ⑤ 协议（bl.cpp）
+             ├─ 发 'C' 请求 CRC 模式
+             ├─ 收到首包 → sink_.on_file_start(name, size)
+             │     ├─ 校验 size ≥ 1 且 ≤ BL_APP_SIZE
+             │     ├─ meta().mark_download()          ① 先置 Download（不可信）
+             │     ├─ erase_region(write_len)          ② 按扇区擦除
+             │     └─ 回 ACK + 'C'（此刻擦除已做完，PC 还在等 ACK，不会超时）
+             ├─ 收到数据包 → sink_.on_file_data(offset, data, len)
+             │     ├─ flash_write(BL_APP_BASE + offset, data, len)
+             │     └─ crc_.update(data, crc_len)        ④ 边收边算 CRC32
+             ├─ 收到 EOT → sink_.on_file_end(total)    记录本端算出的 CRC32
+             └─ 收结束帧（全零首包）
+        │
+        ├─ 校验：收到的字节数 ≥ 声明大小        挡"半截文件被当成完整固件"
+        ├─ verify_vector_table()              ④ 确认刷进去的确实能启动
+        └─ meta().commit(size, crc32, version) ⑤ 置 Valid + 记录指纹
+      │
+      └─ outcome == Done → delay_ms(300) → Boot::jump(BL_APP_BASE)
+                                             ↑ 和 ④ 同一条路径，只有一条跳转路
+    }
+```
+
+对应代码（`Session::run()` 的后半段）：
+
+```cpp
+    /* 确认固件大小与声明一致，防止半截文件被当成完整固件 */
+    if (out.stats.received < declared_size_) {
+        result_.outcome = IapResult::Failed;
+        result_.error   = Status::Protocol;
+        return result_;
+    }
+
+    /* 校验向量表，确保刷进去的东西确实能启动 */
+    if (!ok(verify_vector_table(cfg_.app_base, nullptr))) {
+        result_.outcome = IapResult::Failed;
+        result_.error   = Status::CrcFail;
+        return result_;
+    }
+
+    /* 提交：置 Valid 并记录 size / crc32 / 版本 */
+    if (!ok(meta().commit(result_.fw_size, result_.fw_crc32, result_.version))) {
+        result_.outcome = IapResult::Failed;
+        result_.error   = Status::FlashFail;
+        return result_;
+    }
+
+    result_.outcome = IapResult::Done;
+```
+
+**注意顺序**：先 `verify_vector_table()` 再 `commit()`。
+校验不过就不 commit，状态留在 `Download` —— 下次上电会判为"不可跳转"，
+停在 IAP 等重刷。这样坏固件永远不会被跳转。
+
+---
+
+### ⑥ 校验一共几处、各自挡什么
+
+| 位置 | 函数 | 判据 | 挡住什么 |
+|---|---|---|---|
+| 启动决策第 3 条 | `verify_vector_table()` | 栈顶落在 `[BL_SRAM_BASE, BL_SRAM_END]`；入口落在 APP 区内且最低位为 1（Thumb） | 刷进去的东西根本不是一个能启动的镜像（错地址、空片、误烧） |
+| 启动决策第 4 条 | `verify_image()` | 重算 Flash 的 CRC32 == 配置区记录值 | Flash 位翻转、擦写不完整 |
+| 升级收完时 | `verify_vector_table()` | 同上 | 传坏/填错的固件，**不 commit**，状态停在 Download |
+| 每个数据帧 | YMODEM 帧 CRC16 | 帧 CRC 正确才回 ACK | 串口传输误码（错了就让上位机重传） |
+| 上电自检 | `crc_selftest()` | 已知输入 → 期望输出 | **校验器自己写错**（最隐蔽的一类） |
+
+向量表校验的实际判据（`verify_vector_table()`）：
+
+```cpp
+    const uint32_t initial_sp    = vec[0];   /* 向量表第 0 字：初始栈顶 */
+    const uint32_t reset_handler = vec[1];   /* 向量表第 1 字：复位入口 */
+
+    const bool sp_ok =
+        (initial_sp >= BL_SRAM_BASE) && (initial_sp <= BL_SRAM_END);
+
+    const bool entry_ok =
+        (reset_handler >= BL_APP_BASE) &&
+        (reset_handler <  (BL_APP_BASE + BL_APP_SIZE)) &&
+        ((reset_handler & 0x1U) != 0U);      /* Thumb 地址最低位必须是 1 */
+
+    return (sp_ok && entry_ok) ? Status::Ok : Status::CrcFail;
+```
+
+一个必须与上位机对齐的约定（`verify_image()` 注释原文）：
+
+> **CRC32 只覆盖固件原始长度 `size`，不做任何对齐取整。**
+> YMODEM 按 1024 字节分包，最后一包不足时发送方会用填充字节补满
+> （不同工具的填充值可能是 `0x00` / `0x1A` / `0xFF`），这些填充字节同样会被
+> 写进 Flash。若上位机按"原始文件字节"算、而本端按"对齐后长度"算，
+> 结果必然对不上。因此双方统一：**CRC 只覆盖前 `size` 字节**。
+
+---
+
+## 掉电安全：为什么这个顺序不会变砖
 
 固件状态只有三个：
 
-| 状态 | 什么时候 | 结果 |
+| 状态 | 什么时候 | 上电后的结果 |
 |---|---|---|
 | `Invalid` | 配置区空 / 没刷过 | 留在 IAP |
-| `Download` | 正在写，或写到一半掉电 | 留在 IAP（可重刷，**不会变砖**） |
+| `Download` | 正在写，或写到一半掉电 | 留在 IAP（可重刷） |
 | `Valid` | 写完且校验通过 | 跳转 APP |
 
-**升级的原子顺序**（掉电安全就靠这个顺序）：
+升级的原子顺序（**① 必须在 ② 之前**）：
 
 ```
 ① 状态置 Download（先让固件"不可信"）
@@ -95,8 +438,17 @@ int main(void) {
 ⑤ 状态置 Valid → 直接跳新固件
 ```
 
-第 ① 步必须在 ② 之前。反过来的话，擦除中途掉电会留下"状态可跳转但 APP 是空片"
-的组合 —— 那才是真变砖。
+顺序写反（先擦再置标志）时，擦除中途掉电会留下"状态 Valid 但 APP 是空片"
+的组合 —— 那才是真变砖。按上面的顺序，任意时刻掉电都安全：
+
+| 掉电时刻 | 配置区状态 | 上电行为 |
+|---|---|---|
+| 置 Download 之前 | `Invalid` / `Valid` | 正常（原固件没动） |
+| 置 Download 之后 | `Download` | 停在 IAP，可重刷 |
+| 擦除 APP 中途 | `Download` | 停在 IAP，可重刷 |
+| 传输数据中途 | `Download` | 停在 IAP，可重刷 |
+| 校验失败 | `Download` | 停在 IAP，可重刷 |
+
 
 ---
 
