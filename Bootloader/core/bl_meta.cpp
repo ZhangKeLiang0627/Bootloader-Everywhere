@@ -52,6 +52,15 @@ Status Meta::init() noexcept
     if (found) {
         seq_ = meta_.seq;
     } else {
+        // 无有效槽：回到「无固件」起点。
+        // 若扫描时已越过占位槽（说明区内有损坏/旧格式残槽），必须先擦掉
+        // 整片再从头写 —— 否则从偏移 0 写入会撞上未擦除的 Flash 而失败，
+        // 表现为「永远升级不进去」。
+        if (next_offset_ != 0U) {
+            if (!ok(flash_erase(BL_META_BASE, BL_META_SIZE))) {
+                return Status::FlashFail;
+            }
+        }
         meta_        = Slot{};
         meta_.state  = FwState::Invalid;
         seq_         = 0;
