@@ -5,16 +5,15 @@
 #include "stm32f4xx_hal.h"
 #include <cstring>
 
-// 板级配置：改这几行就能换板子。
-// 串口本身由宿主工程初始化（8N1、波特率与上位机一致），这里只声明库用哪一路。
+// 板级配置：改这几行就能换板子。串口和按钮本身都由宿主工程初始化，这里只声明库用哪个。
 #define BL_UART_INSTANCE        USART1
-#define BL_UART_GPIO_PORT       GPIOA
-#define BL_UART_TX_PIN          GPIO_PIN_9
-#define BL_UART_RX_PIN          GPIO_PIN_10
-#define BL_UART_GPIO_AF         GPIO_AF7_USART1
 
-#define BL_UART_CLK_ENABLE()    __HAL_RCC_USART1_CLK_ENABLE()
-#define BL_UART_GPIO_CLK_ENABLE() __HAL_RCC_GPIOA_CLK_ENABLE()
+// 硬件按钮：按住它上电 → 留在 IAP，不启动 APP。板子上没有按钮就把下面四行注释掉。
+// 宿主必须把这个脚配成「输入 + 上拉」（见 Core/Src/gpio.c 的 MX_GPIO_Init）。
+#define BL_BOOT_PIN_PORT        GPIOC
+#define BL_BOOT_PIN             GPIO_PIN_0              // PC0
+#define BL_BOOT_PIN_PRESSED_LEVEL 0U                    // 按下时的电平：0 = 按下拉低
+#define BL_BOOT_PIN_CLK_MASK    RCC_AHB1ENR_GPIOCEN     // 与上面端口对应，换端口要一起改
 
 namespace bl {
 
@@ -421,6 +420,39 @@ ResetCause resetCause() noexcept
     if ((csr & RCC_CSR_PINRSTF)  != 0U) { return ResetCause::Pin;      }
 
     return ResetCause::Unknown;
+}
+
+/* ---- 上电读硬件按钮 ---- */
+
+namespace {
+
+#ifdef BL_BOOT_PIN_PORT
+uint32_t bootPinLevel() noexcept
+{
+    return (BL_BOOT_PIN_PORT->IDR & BL_BOOT_PIN) ? 1U : 0U;
+}
+#endif
+
+} // namespace
+
+bool bootPinHeld() noexcept
+{
+#ifdef BL_BOOT_PIN_PORT
+    // 时钟没开时读 IDR 恒为 0（本板实测），会被误判成「按住」→ 每次上电都进 IAP。
+    // 所以此时按「没按」处理：按键失效只是少一条通道，误判会让 APP 永远起不来。
+    if ((RCC->AHB1ENR & BL_BOOT_PIN_CLK_MASK) == 0U) {
+        return false;
+    }
+
+    if (bootPinLevel() != BL_BOOT_PIN_PRESSED_LEVEL) {
+        return false;
+    }
+
+    delayMs(5U);                        // 连读两次滤掉上电毛刺；未按下时零开销
+    return bootPinLevel() == BL_BOOT_PIN_PRESSED_LEVEL;
+#else
+    return false;                       // 板子上没有按钮
+#endif
 }
 
 } // namespace bl
