@@ -66,10 +66,10 @@ APP、还是留在原地等新的固件。
 **只有一件可选的事**：想支持"网页一键刷机"，就在串口收齐关键字后软复位。
 
 ```c
-#include "bl.h"            /* 只用到 bl_request_update，零依赖 */
+#include "bl.h"            /* 只用到 blRequestUpdate，零依赖 */
 
 /* 在你的串口接收处理里，逐字节匹配关键字，匹配完整后调用： */
-bl_request_update();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
+blRequestUpdate();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
 ```
 
 样板见 `TestApp/app_main.c`（test-app 分支，纯寄存器实现）。

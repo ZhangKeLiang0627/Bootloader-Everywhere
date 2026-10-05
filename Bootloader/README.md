@@ -17,7 +17,7 @@
 ```
 Bootloader/
 ├── README.md            ← 你正在看的这一份，唯一的文档
-├── bl.h                 ← 唯一入口头：bl_run() / bl_request_update()
+├── bl.h                 ← 唯一入口头：blRun() / blRequestUpdate()
 ├── bl.cpp               ← 全部实现（不自带任何芯片头文件）
 ├── bl_port.h            ← 移植契约：要实现的那些函数 + 填空说明
 ├── bl_port_stm32f4.cpp  ← STM32F4 现成实现（换芯片照它写一份）
@@ -54,7 +54,7 @@ Bootloader/
 #include "bl.h"
 int main(void) {
     my_stuff_init();
-    bl_run();              /* 不返回 */
+    blRun();              /* 不返回 */
 }
 ```
 
@@ -66,7 +66,7 @@ int main(void) {
 ## 执行流程（图解 + 核心代码）
 
 > 想读代码就从 **`bl.cpp` 的最末尾**开始 —— `main()` 在文件最后，它只有一句
-> `bl::bl_entry()`。下面按"复位之后实际发生的顺序"讲。
+> `bl::blEntry()`。下面按"复位之后实际发生的顺序"讲。
 
 ### 全景：谁调用谁
 
@@ -75,34 +75,34 @@ int main(void) {
  └─ 启动文件 startup_stm32f401xe.s
      └─ SystemInit()                     HAL 的：时钟、FPU
          └─ __main → main()              ★ bl.cpp 文件末尾
-             └─ bl_run()                 extern "C"，C / C++ 工程都能调
-                 └─ bl::bl_entry()       ★ 真正的入口（不返回）
+             └─ blRun()                 extern "C"，C / C++ 工程都能调
+                 └─ bl::blEntry()       ★ 真正的入口（不返回）
                      │
                      ├─ ① 五项自检 ──────────── 任一失败 → fatal() 停住
                      ├─ ② banner + dump ────── 打印芯片与分区（调试用）
-                     ├─ ③ layout_check() ───── 分区是否落在扇区边界
+                     ├─ ③ layoutCheck() ───── 分区是否落在扇区边界
                      ├─ ④ Boot::decide()      ★ 核心决策
                      │    ├─ 不可跳转 ──────────────────► 进 ⑤ IAP 循环
                      │    ├─ 软件复位 + Valid ──────────► 进 ⑤ IAP 循环（限时窗口）
-                     │    └─ 校验全过 ──► Boot::jump() ─► jump_to_app() 八步
+                     │    └─ 校验全过 ──► Boot::jump() ─► jumpToApp() 八步
                      └─ ⑤ IAP 循环 Session::run()
                             └─ 升级成功 ──► Boot::jump()（和上面同一条路）
 ```
 
-只有**一个地方**能让控制权交给 APP：`jump_to_app()`。其余所有路径要么停在
+只有**一个地方**能让控制权交给 APP：`jumpToApp()`。其余所有路径要么停在
 `fatal()`，要么回到 IAP 循环 —— 这就是"不会跑飞"的结构性保证。
 
 ---
 
-### ① 五项自检（`bl_entry()` 开头）
+### ① 五项自检（`blEntry()` 开头）
 
 ```cpp
-[[noreturn]] void bl_entry() noexcept
+[[noreturn]] void blEntry() noexcept
 {
-    if (!ok(platform_init()))             fatal("platform init failed");
-    if (!ok(uart_init(BL_UART_BAUDRATE))) fatal("uart init failed");
-    if (!ok(flash_init()))                fatal("flash init failed");
-    if (!ok(crc_selftest()))              fatal("crc selftest failed (check poly/init)");
+    if (!ok(platformInit()))             fatal("platform init failed");
+    if (!ok(uartInit(BL_UART_BAUDRATE))) fatal("uart init failed");
+    if (!ok(flashInit()))                fatal("flash init failed");
+    if (!ok(crcSelftest()))              fatal("crc selftest failed (check poly/init)");
     if (!ok(meta().init()))               fatal("meta init failed");
 
     banner();
@@ -111,37 +111,37 @@ int main(void) {
 
 | 自检 | 干什么 | 失败为什么直接停 |
 |---|---|---|
-| `platform_init()` | 时钟树、1ms 时基、串口引脚 | 时钟都不对，后面所有事都没意义 |
-| `uart_init()` | 8N1 串口 | 不能刷机、也打不出日志 |
-| `flash_init()` | 解锁 Flash、开接口时钟 | 擦写会静默失败 |
-| `crc_selftest()` | **自己验自己**：用已知数据算一遍 CRC16/CRC32，和期望值比 | CRC 实现错了（多项式/初值/位序），会导致"好固件被判成坏"或反过来 |
+| `platformInit()` | 时钟树、1ms 时基、串口引脚 | 时钟都不对，后面所有事都没意义 |
+| `uartInit()` | 8N1 串口 | 不能刷机、也打不出日志 |
+| `flashInit()` | 解锁 Flash、开接口时钟 | 擦写会静默失败 |
+| `crcSelftest()` | **自己验自己**：用已知数据算一遍 CRC16/CRC32，和期望值比 | CRC 实现错了（多项式/初值/位序），会导致"好固件被判成坏"或反过来 |
 | `meta().init()` | 扫描配置区，装载最新有效槽 | 读不出固件状态，无法决策 |
 
-`crc_selftest()` 值得单独说：**校验逻辑本身也要被校验**。它挡的是"校验器写错"
+`crcSelftest()` 值得单独说：**校验逻辑本身也要被校验**。它挡的是"校验器写错"
 这类最难发现的问题 —— 否则你会看到"固件明明没问题却一直被判 CRC 错"。
 
 ---
 
-### ② 分区检查 `layout_check()`
+### ② 分区检查 `layoutCheck()`
 
 ```cpp
-bool partition_aligned(const char* name, uint32_t base) noexcept
+bool partitionAligned(const char* name, uint32_t base) noexcept
 {
-    const uint32_t unit = flash_sector_size(base);
+    const uint32_t unit = flashSectorSize(base);
     if (unit == 0U) { /* 地址根本不在这颗芯片的 Flash 里 */ return false; }
-    if (flash_bytes_to_sector_end(base) != unit) {
+    if (flashBytesToSectorEnd(base) != unit) {
         // 到下一扇区边界的字节数 != 本扇区大小 ⇒ base 不在扇区起点上
         return false;
     }
     return true;
 }
 
-bool layout_check() noexcept
+bool layoutCheck() noexcept
 {
     bool all = true;
-    if (!partition_aligned("BOOT", BL_BOOT_BASE)) all = false;
-    if (!partition_aligned("APP",  BL_APP_BASE))  all = false;
-    if (!partition_aligned("META", BL_META_BASE)) all = false;
+    if (!partitionAligned("BOOT", BL_BOOT_BASE)) all = false;
+    if (!partitionAligned("APP",  BL_APP_BASE))  all = false;
+    if (!partitionAligned("META", BL_META_BASE)) all = false;
     return all;
 }
 ```
@@ -152,9 +152,9 @@ bool layout_check() noexcept
 **特别之处**：检查不通过时，如果固件本身是可启动的，仍然放它跑：
 
 ```cpp
-    if (!layout_check()) {
+    if (!layoutCheck()) {
         BL_LOG("[main] FATAL: partition layout invalid\r\n");
-        if (meta().should_boot()) {
+        if (meta().shouldBoot()) {
             Boot::jump(BL_APP_BASE);        // 分区地址配错 ≠ 固件坏，先让 APP 活下去
         }
         fatal("partition layout invalid");  // 否则停在报错，绝不进 IAP 做破坏性擦除
@@ -173,10 +173,10 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
     Meta& m = meta();
 
     // 复位原因必须每次启动都读（read-and-clear），否则旧标志会累积到下次启动
-    const ResetCause cause = reset_cause();
+    const ResetCause cause = resetCause();
 
     // 1. 固件状态不可跳转 → 进 IAP
-    if (!m.should_boot()) {
+    if (!m.shouldBoot()) {
         return { Action::EnterIap, "no bootable firmware" };
     }
 
@@ -186,14 +186,14 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
     }
 
     // 3. 向量表校验
-    if (!ok(verify_vector_table(cfg.app_base, nullptr))) {
+    if (!ok(verifyVectorTable(cfg.appBase, nullptr))) {
         return { Action::EnterIap, "invalid vector table" };
     }
 
     // 4. 整镜像 CRC32 校验（可选）
-    if (cfg.verify_crc_on_boot) {
+    if (cfg.verifyCrcOnBoot) {
         const Meta::Slot& s = m.current();
-        if (!ok(verify_image(cfg.app_base, s.fw_size, s.fw_crc32, nullptr))) {
+        if (!ok(verifyImage(cfg.appBase, s.fwSize, s.fwCrc32, nullptr))) {
             return { Action::EnterIap, "image crc mismatch" };
         }
     }
@@ -203,10 +203,10 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
 }
 ```
 
-`should_boot()` 的判据只有一条：
+`shouldBoot()` 的判据只有一条：
 
 ```cpp
-bool should_boot() const noexcept { return bootable(meta_.state); }   // state == Valid
+bool shouldBoot() const noexcept { return bootable(meta_.state); }   // state == Valid
 ```
 
 **五种现场情况分别走哪条路**（对着串口日志就能对号入座）：
@@ -225,32 +225,32 @@ bool should_boot() const noexcept { return bootable(meta_.state); }   // state =
    昂贵的校验（CRC32 要读整片 APP 区）。能省的活不干。
 2. **第 2 条排在校验之前**。因为"有人按了升级"这件事的优先级高于"固件是否完好"
    —— 反正马上就要覆盖它了，没必要先花时间校验旧固件。
-3. **`reset_cause()` 每次启动都要读**。`RCC_CSR` 里的复位标志是**累积**的，
+3. **`resetCause()` 每次启动都要读**。`RCC_CSR` 里的复位标志是**累积**的，
    只有读才清。若只在某个分支里读，标志会一直粘着，导致下次启动误判成"软件复位"。
 
 ---
 
-### ④ 跳转到 APP：`Boot::jump()` → `jump_to_app()` 八步
+### ④ 跳转到 APP：`Boot::jump()` → `jumpToApp()` 八步
 
 ```cpp
-void Boot::jump(uint32_t app_base) noexcept
+void Boot::jump(uint32_t appBase) noexcept
 {
-    BL_LOG("[boot] jumping to app @ 0x%08lX\r\n", static_cast<unsigned long>(app_base));
-    jump_to_app(app_base);              // 移植层的函数，正常不返回
+    BL_LOG("[boot] jumping to app @ 0x%08lX\r\n", static_cast<unsigned long>(appBase));
+    jumpToApp(appBase);              // 移植层的函数，正常不返回
     BL_LOG("[boot] jump failed!\r\n");  // 只有跳转失败才会走到这
 }
 ```
 
-真正干活的是移植层的 `jump_to_app()`。**八步的顺序不能乱，一步都不能少**：
+真正干活的是移植层的 `jumpToApp()`。**八步的顺序不能乱，一步都不能少**：
 
 ```cpp
-void jump_to_app(uint32_t app_base) noexcept
+void jumpToApp(uint32_t appBase) noexcept
 {
-    stm32f4::console_tx_flush(100U);   /* 等最后几行日志发完再跳 */
+    stm32f4::consoleTxFlush(100U);   /* 等最后几行日志发完再跳 */
 
     /* 取向量表前两字：初始栈顶与复位入口 */
-    const uint32_t initial_sp = *reinterpret_cast<volatile uint32_t*>(app_base);
-    const uint32_t reset_vec  = *reinterpret_cast<volatile uint32_t*>(app_base + 4U);
+    const uint32_t initialSp = *reinterpret_cast<volatile uint32_t*>(appBase);
+    const uint32_t resetVec  = *reinterpret_cast<volatile uint32_t*>(appBase + 4U);
 
     BL_LOG("[jump] sp=0x%08lX entry=0x%08lX\r\n", ...);
 
@@ -276,11 +276,11 @@ void jump_to_app(uint32_t app_base) noexcept
     }
 
     /* 5. 重定位向量表到 APP，并保证对后续取指立即生效 */
-    SCB->VTOR = app_base;
+    SCB->VTOR = appBase;
     __DSB();
 
     /* 6. 设置主堆栈指针 */
-    __set_MSP(initial_sp);
+    __set_MSP(initialSp);
 
     /* 7. 回到特权级 + 使用 MSP（若此前用过 PSP） */
     __set_CONTROL(0U);
@@ -289,7 +289,7 @@ void jump_to_app(uint32_t app_base) noexcept
     /* 8. 开中断并跳转 */
     __enable_irq();
     using AppEntry = void (*)(void);
-    auto entry = reinterpret_cast<AppEntry>(reset_vec);
+    auto entry = reinterpret_cast<AppEntry>(resetVec);
     entry();                            // ← 控制权在这一行交给 APP
 
     for (;;) { }                        // 正常不会到这
@@ -307,7 +307,7 @@ void jump_to_app(uint32_t app_base) noexcept
 | 5 | `SCB->VTOR` | APP 的中断打进 Bootloader 的向量表 |
 | 6 | `__set_MSP()` | 栈指针还指着 Bootloader 的栈，一压栈就踩坏数据 |
 | 7 | `__set_CONTROL(0)` | 若之前用过 PSP，APP 会在错误的栈上跑 |
-| 8 | 取 `reset_vec` 并调用 | —— 这一步才是真的跳过去 |
+| 8 | 取 `resetVec` 并调用 | —— 这一步才是真的跳过去 |
 
 三个容易踩的顺序/细节陷阱：
 
@@ -321,29 +321,29 @@ void jump_to_app(uint32_t app_base) noexcept
 ### ⑤ 留在 IAP：一次升级的完整调用链
 
 ```
-bl_entry()
+blEntry()
  └─ for (;;) {
       BL_LOG("[main] waiting for YMODEM transfer...");
       Session session;
       session.run()                          ← ⑥ 会话（bl.cpp）
         └─ ymodem_.receive()                 ← ⑤ 协议（bl.cpp）
              ├─ 发 'C' 请求 CRC 模式
-             ├─ 收到首包 → sink_.on_file_start(name, size)
+             ├─ 收到首包 → sink_.onFileStart(name, size)
              │     ├─ 校验 size ≥ 1 且 ≤ BL_APP_SIZE
-             │     ├─ meta().mark_download()          ① 先置 Download（不可信）
-             │     ├─ erase_region(write_len)          ② 按扇区擦除
+             │     ├─ meta().markDownload()          ① 先置 Download（不可信）
+             │     ├─ eraseRegion(writeLen)          ② 按扇区擦除
              │     └─ 回 ACK + 'C'（此刻擦除已做完，PC 还在等 ACK，不会超时）
-             ├─ 收到数据包 → sink_.on_file_data(offset, data, len)
-             │     ├─ flash_write(BL_APP_BASE + offset, data, len)
-             │     └─ crc_.update(data, crc_len)        ④ 边收边算 CRC32
-             ├─ 收到 EOT → sink_.on_file_end(total)    记录本端算出的 CRC32
+             ├─ 收到数据包 → sink_.onFileData(offset, data, len)
+             │     ├─ flashWrite(BL_APP_BASE + offset, data, len)
+             │     └─ crc_.update(data, crcLen)        ④ 边收边算 CRC32
+             ├─ 收到 EOT → sink_.onFileEnd(total)    记录本端算出的 CRC32
              └─ 收结束帧（全零首包）
         │
         ├─ 校验：收到的字节数 ≥ 声明大小        挡"半截文件被当成完整固件"
-        ├─ verify_vector_table()              ④ 确认刷进去的确实能启动
+        ├─ verifyVectorTable()              ④ 确认刷进去的确实能启动
         └─ meta().commit(size, crc32, version) ⑤ 置 Valid + 记录指纹
       │
-      └─ outcome == Done → delay_ms(300) → Boot::jump(BL_APP_BASE)
+      └─ outcome == Done → delayMs(300) → Boot::jump(BL_APP_BASE)
                                              ↑ 和 ④ 同一条路径，只有一条跳转路
     }
 ```
@@ -359,14 +359,14 @@ bl_entry()
     }
 
     /* 校验向量表，确保刷进去的东西确实能启动 */
-    if (!ok(verify_vector_table(cfg_.app_base, nullptr))) {
+    if (!ok(verifyVectorTable(cfg_.appBase, nullptr))) {
         result_.outcome = IapResult::Failed;
         result_.error   = Status::CrcFail;
         return result_;
     }
 
     /* 提交：置 Valid 并记录 size / crc32 / 版本 */
-    if (!ok(meta().commit(result_.fw_size, result_.fw_crc32, result_.version))) {
+    if (!ok(meta().commit(result_.fwSize, result_.fwCrc32, result_.version))) {
         result_.outcome = IapResult::Failed;
         result_.error   = Status::FlashFail;
         return result_;
@@ -375,7 +375,7 @@ bl_entry()
     result_.outcome = IapResult::Done;
 ```
 
-**注意顺序**：先 `verify_vector_table()` 再 `commit()`。
+**注意顺序**：先 `verifyVectorTable()` 再 `commit()`。
 校验不过就不 commit，状态留在 `Download` —— 下次上电会判为"不可跳转"，
 停在 IAP 等重刷。这样坏固件永远不会被跳转。
 
@@ -385,30 +385,30 @@ bl_entry()
 
 | 位置 | 函数 | 判据 | 挡住什么 |
 |---|---|---|---|
-| 启动决策第 3 条 | `verify_vector_table()` | 栈顶落在 `[BL_SRAM_BASE, BL_SRAM_END]`；入口落在 APP 区内且最低位为 1（Thumb） | 刷进去的东西根本不是一个能启动的镜像（错地址、空片、误烧） |
-| 启动决策第 4 条 | `verify_image()` | 重算 Flash 的 CRC32 == 配置区记录值 | Flash 位翻转、擦写不完整 |
-| 升级收完时 | `verify_vector_table()` | 同上 | 传坏/填错的固件，**不 commit**，状态停在 Download |
+| 启动决策第 3 条 | `verifyVectorTable()` | 栈顶落在 `[BL_SRAM_BASE, BL_SRAM_END]`；入口落在 APP 区内且最低位为 1（Thumb） | 刷进去的东西根本不是一个能启动的镜像（错地址、空片、误烧） |
+| 启动决策第 4 条 | `verifyImage()` | 重算 Flash 的 CRC32 == 配置区记录值 | Flash 位翻转、擦写不完整 |
+| 升级收完时 | `verifyVectorTable()` | 同上 | 传坏/填错的固件，**不 commit**，状态停在 Download |
 | 每个数据帧 | YMODEM 帧 CRC16 | 帧 CRC 正确才回 ACK | 串口传输误码（错了就让上位机重传） |
-| 上电自检 | `crc_selftest()` | 已知输入 → 期望输出 | **校验器自己写错**（最隐蔽的一类） |
+| 上电自检 | `crcSelftest()` | 已知输入 → 期望输出 | **校验器自己写错**（最隐蔽的一类） |
 
-向量表校验的实际判据（`verify_vector_table()`）：
+向量表校验的实际判据（`verifyVectorTable()`）：
 
 ```cpp
-    const uint32_t initial_sp    = vec[0];   /* 向量表第 0 字：初始栈顶 */
-    const uint32_t reset_handler = vec[1];   /* 向量表第 1 字：复位入口 */
+    const uint32_t initialSp    = vec[0];   /* 向量表第 0 字：初始栈顶 */
+    const uint32_t resetHandler = vec[1];   /* 向量表第 1 字：复位入口 */
 
-    const bool sp_ok =
-        (initial_sp >= BL_SRAM_BASE) && (initial_sp <= BL_SRAM_END);
+    const bool spOk =
+        (initialSp >= BL_SRAM_BASE) && (initialSp <= BL_SRAM_END);
 
-    const bool entry_ok =
-        (reset_handler >= BL_APP_BASE) &&
-        (reset_handler <  (BL_APP_BASE + BL_APP_SIZE)) &&
-        ((reset_handler & 0x1U) != 0U);      /* Thumb 地址最低位必须是 1 */
+    const bool entryOk =
+        (resetHandler >= BL_APP_BASE) &&
+        (resetHandler <  (BL_APP_BASE + BL_APP_SIZE)) &&
+        ((resetHandler & 0x1U) != 0U);      /* Thumb 地址最低位必须是 1 */
 
-    return (sp_ok && entry_ok) ? Status::Ok : Status::CrcFail;
+    return (spOk && entryOk) ? Status::Ok : Status::CrcFail;
 ```
 
-一个必须与上位机对齐的约定（`verify_image()` 注释原文）：
+一个必须与上位机对齐的约定（`verifyImage()` 注释原文）：
 
 > **CRC32 只覆盖固件原始长度 `size`，不做任何对齐取整。**
 > YMODEM 按 1024 字节分包，最后一包不足时发送方会用填充字节补满
@@ -457,11 +457,11 @@ bl_entry()
 **只有一件可选的事**：想支持"运行中被刷"，就在串口收齐关键字后软复位。
 
 ```c
-#include "bl.h"          /* 只用到 bl_request_update，零依赖 */
+#include "bl.h"          /* 只用到 blRequestUpdate，零依赖 */
 
 /* 在你的串口接收处理里逐字节匹配，匹配完整才调用 */
 if (匹配到 BL_BOOT_MAGIC_STRING) {
-    bl_request_update();     /* 写 SCB->AIRCR 触发软件复位 */
+    blRequestUpdate();     /* 写 SCB->AIRCR 触发软件复位 */
 }
 ```
 
@@ -517,8 +517,8 @@ grep -E '#include *[<"](stm32|gd32|ch32|hal)' Bootloader/bl.cpp    # 应该没�
 | 现象 | 原因 / 对策 |
 |---|---|
 | 串口全是乱码 | `HSE_VALUE` 与 `bl_config.h` 的 `BL_HSE_HZ` 不一致。HAL 按 HSE 反算波特率，差一点就全错。库有 `#error` 挡 |
-| 升级永远失败、`mark_download failed` | 配置区里有**旧格式/损坏的残槽**，偏移 0 没被擦除，写不进去。库已在 `Meta::init()` 里处理（发现脏槽先擦整片重来）—— 换芯片改槽结构时别把这个分支改掉 |
-| 软复位唤回进不去窗口 | 在线探针连着时，`SYSRESETREQ` 会连带置引脚复位标志，两者同时有效。`reset_cause()` 里**软件复位必须优先于引脚复位**（库里已如此） |
+| 升级永远失败、`markDownload failed` | 配置区里有**旧格式/损坏的残槽**，偏移 0 没被擦除，写不进去。库已在 `Meta::init()` 里处理（发现脏槽先擦整片重来）—— 换芯片改槽结构时别把这个分支改掉 |
+| 软复位唤回进不去窗口 | 在线探针连着时，`SYSRESETREQ` 会连带置引脚复位标志，两者同时有效。`resetCause()` 里**软件复位必须优先于引脚复位**（库里已如此） |
 | APP 完全不输出 | 多半是 APP 自己少做了事：重定位 `SCB->VTOR`、使能 FPU、清残留 SysTick。见 `TestApp/README.md` |
 | ROM 直接超 16KB | 别链接标准 `printf`：`vsnprintf` 会连带浮点格式化吃掉约 6.5KB。用库里的 `BL_LOG` |
 | 等待循环卡死 | 所有"等标志位"的循环都要带超时，硬件异常时也不能死等 |

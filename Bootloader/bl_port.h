@@ -17,8 +17,8 @@
  *  实现要点
  * ---------------------------------------------------------------------------
  *   · 全部用 Status 返回失败，不要用异常 / 动态内存
- *   · flash_erase 必须拒绝擦除 Bootloader 自身区域（最后一道保护）
- *   · reset_cause 必须「读后即清」，且软件复位要优先于引脚复位
+ *   · flashErase 必须拒绝擦除 Bootloader 自身区域（最后一道保护）
+ *   · resetCause 必须「读后即清」，且软件复位要优先于引脚复位
  *     （在线探针会连带拉 NRST，两者会同时置位）
  *   · 所有「等标志位」的循环都要带超时，硬件异常时也不能死等
  */
@@ -36,7 +36,7 @@ enum class ResetCause : uint32_t {
     Unknown = 0,   ///< 无法判定
     PowerOn,       ///< 上电 / 掉电复位
     Pin,           ///< NRST 引脚复位（用户按复位键）
-    Software,      ///< 软件复位（APP 调 bl_request_update 触发的那种）
+    Software,      ///< 软件复位（APP 调 blRequestUpdate 触发的那种）
     BrownOut,      ///< 欠压复位
     LowPower,      ///< 低功耗模式复位
 };
@@ -48,25 +48,25 @@ enum class ResetCause : uint32_t {
 /* ---- 平台 ---- */
 
 /// 建立运行环境：HAL/时钟/1ms 时基/调试串口引脚。可重复调用
-Status platform_init() noexcept;
+Status platformInit() noexcept;
 
 /* ---- Flash ---- */
 
-Status   flash_init() noexcept;                              ///< 解锁 Flash、开接口时钟
-uint32_t flash_sector_size(uint32_t addr) noexcept;          ///< 含 addr 的扇区大小；0=地址非法
-uint32_t flash_bytes_to_sector_end(uint32_t addr) noexcept;  ///< addr 到下一扇区边界的字节数
-Status   flash_erase(uint32_t addr, uint32_t len) noexcept;  ///< 擦除（addr/len 已按扇区对齐）
-Status   flash_write(uint32_t addr, const void* data, uint32_t len) noexcept;  ///< 编程写入
-Status   flash_read(uint32_t addr, void* buf, uint32_t len) noexcept;          ///< 读取
+Status   flashInit() noexcept;                              ///< 解锁 Flash、开接口时钟
+uint32_t flashSectorSize(uint32_t addr) noexcept;          ///< 含 addr 的扇区大小；0=地址非法
+uint32_t flashBytesToSectorEnd(uint32_t addr) noexcept;  ///< addr 到下一扇区边界的字节数
+Status   flashErase(uint32_t addr, uint32_t len) noexcept;  ///< 擦除（addr/len 已按扇区对齐）
+Status   flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept;  ///< 编程写入
+Status   flashRead(uint32_t addr, void* buf, uint32_t len) noexcept;          ///< 读取
 
 /* ---- 串口 ---- */
 
-Status uart_init(uint32_t baudrate) noexcept;                ///< 8N1，含引脚复用
-Status uart_read(uint8_t* buf, uint32_t len, uint32_t timeout_ms,
-                 uint32_t* out_read) noexcept;               ///< 阻塞读；超时是「总超时」
-bool   uart_try_getc(uint8_t* ch) noexcept;                  ///< 非阻塞收一个字节
-Status uart_write(const uint8_t* buf, uint32_t len) noexcept;///< 阻塞发送
-void   uart_flush_rx() noexcept;                             ///< 清空接收缓冲与错误标志
+Status uartInit(uint32_t baudrate) noexcept;                ///< 8N1，含引脚复用
+Status uartRead(uint8_t* buf, uint32_t len, uint32_t timeoutMs,
+                 uint32_t* outRead) noexcept;               ///< 阻塞读；超时是「总超时」
+bool   uartTryGetc(uint8_t* ch) noexcept;                  ///< 非阻塞收一个字节
+Status uartWrite(const uint8_t* buf, uint32_t len) noexcept;///< 阻塞发送
+void   uartFlushRx() noexcept;                             ///< 清空接收缓冲与错误标志
 
 /* ---- 系统 ---- */
 
@@ -76,13 +76,13 @@ void   uart_flush_rx() noexcept;                             ///< 清空接收�
  *   → 设 SCB->VTOR → 设 MSP → 设 CONTROL=0 → 跳到入口
  * 正常不返回。（RISC-V 内核请查手册，向量表机制不同）
  */
-void jump_to_app(uint32_t app_base) noexcept;
+void jumpToApp(uint32_t appBase) noexcept;
 
-uint32_t tick_ms() noexcept;              ///< 上电起的毫秒数
-void     delay_ms(uint32_t ms) noexcept;  ///< 毫秒延时
+uint32_t tickMs() noexcept;              ///< 上电起的毫秒数
+void     delayMs(uint32_t ms) noexcept;  ///< 毫秒延时
 
 /// 上次复位原因。实现必须「读后即清」，否则标志会粘住导致误判
-ResetCause reset_cause() noexcept;
+ResetCause resetCause() noexcept;
 
 } // namespace bl
 
@@ -90,59 +90,59 @@ ResetCause reset_cause() noexcept;
  * 填空模板：实现新平台时对着这些 TODO 写
  * ==========================================================================
  *
- *  Status platform_init() noexcept;
+ *  Status platformInit() noexcept;
  *      TODO 1) HAL / 芯片底座初始化
  *           2) 系统时钟（HSE 起不来要能退回内部 RC，别死在死循环里）
  *           3) 1ms 时基
  *
- *  Status flash_init() noexcept;
+ *  Status flashInit() noexcept;
  *      TODO 解锁 Flash，使能接口时钟
  *
- *  uint32_t flash_sector_size(uint32_t addr) noexcept;
+ *  uint32_t flashSectorSize(uint32_t addr) noexcept;
  *      TODO 返回包含 addr 的扇区（页）大小，地址非法返回 0
  *           注意两类 Flash：不等长扇区（STM32F4）与等长页（GD32）
  *
- *  uint32_t flash_bytes_to_sector_end(uint32_t addr) noexcept;
+ *  uint32_t flashBytesToSectorEnd(uint32_t addr) noexcept;
  *      TODO addr 到下一扇区边界的字节数（用于判断分区是否对齐）
  *
- *  Status flash_erase(uint32_t addr, uint32_t len) noexcept;
+ *  Status flashErase(uint32_t addr, uint32_t len) noexcept;
  *      TODO 整扇区擦除（addr/len 已对齐）
  *           ★ 必须拒绝擦除 Bootloader 自身区域，这是最后一道保护
  *
- *  Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept;
+ *  Status flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept;
  *      TODO 编程写入，处理好对齐 / 补齐
  *
- *  Status flash_read(uint32_t addr, void* buf, uint32_t len) noexcept;
+ *  Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept;
  *      TODO 多数 Cortex-M 是内存映射，memcpy 即可
  *
- *  Status uart_init(uint32_t baudrate) noexcept;
+ *  Status uartInit(uint32_t baudrate) noexcept;
  *      TODO 8N1 + 引脚复用 + 使能收发
  *
- *  Status uart_read(uint8_t* buf, uint32_t len, uint32_t timeout_ms,
- *                   uint32_t* out_read) noexcept;
+ *  Status uartRead(uint8_t* buf, uint32_t len, uint32_t timeoutMs,
+ *                   uint32_t* outRead) noexcept;
  *      TODO 阻塞读；语义是「总超时」而不是「每字节超时」，
- *           已读字节数写入 out_read，超时返回 Status::Timeout
+ *           已读字节数写入 outRead，超时返回 Status::Timeout
  *
- *  bool uart_try_getc(uint8_t* ch) noexcept;
+ *  bool uartTryGetc(uint8_t* ch) noexcept;
  *      TODO 非阻塞探测一个字节，有则写入 *ch 并返回 true
  *
- *  Status uart_write(const uint8_t* buf, uint32_t len) noexcept;
+ *  Status uartWrite(const uint8_t* buf, uint32_t len) noexcept;
  *      TODO 阻塞发送完
  *
- *  void uart_flush_rx() noexcept;
+ *  void uartFlushRx() noexcept;
  *      TODO 清空接收缓冲与溢出错误标志
  *
- *  void jump_to_app(uint32_t app_base) noexcept;
- *      TODO 从 app_base 的向量表取 [0] 设 MSP、取 [1] 跳到入口；
+ *  void jumpToApp(uint32_t appBase) noexcept;
+ *      TODO 从 appBase 的向量表取 [0] 设 MSP、取 [1] 跳到入口；
  *           跳转前把内核状态清干净（见上方注释的八步）
  *
- *  uint32_t tick_ms() noexcept;
+ *  uint32_t tickMs() noexcept;
  *      TODO 上电起的毫秒数（HAL_GetTick 或自己的 SysTick 计数）
  *
- *  void delay_ms(uint32_t ms) noexcept;
+ *  void delayMs(uint32_t ms) noexcept;
  *      TODO 毫秒延时
  *
- *  ResetCause reset_cause() noexcept;
+ *  ResetCause resetCause() noexcept;
  *      TODO 读并清除复位原因标志。
  *           标志是累积的 → 必须读后即清，否则「软件复位」会一直粘住
  *           ★ 软件复位必须优先于引脚复位：探针连着时两者会同时置位
