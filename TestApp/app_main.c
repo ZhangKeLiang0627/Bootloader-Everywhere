@@ -1,6 +1,6 @@
 /**
  * @file    app_main.c
- * @brief   LUMOS-bootloader 的测试 APP
+ * @brief   Bootloader-Everywhere 的测试 APP
  *
  * 用途：验证「Bootloader 收到固件 -> 写入 APP 区 -> 校验 -> 跳转」这条链路。
  *
@@ -388,7 +388,7 @@ int main(void)
 
     APP_MARK(7, MK_BANNER);
     uart_puts("\r\n");
-    uart_puts("===== LUMOS APP (test) =====\r\n");
+    uart_puts("===== Bootloader-Everywhere APP (test) =====\r\n");
     uart_puts("[app] running at  : ");
     uart_put_hex((uint32_t)(uintptr_t)&main);
     uart_puts("\r\n");

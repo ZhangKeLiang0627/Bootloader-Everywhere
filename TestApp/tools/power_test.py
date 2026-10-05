@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-断电暴力测试引导 —— LUMOS-bootloader
+断电暴力测试引导 —— Bootloader-Everywhere
 
 手动配合的断电测试：脚本在每个「断电机时」停下并醒目提示「现在断电」，
 你在看到提示的瞬间拔掉板子电源（或 USB），数 2 秒再插回。
@@ -73,7 +73,7 @@ def power_prompt(why):
         n = ser.in_waiting
         if n:
             buf += ser.read(n)
-            if b"LUMOS-bootloader" in buf:
+            if b"== Bootloader-Everywhere ==" in buf:
                 saw_banner = True
                 time.sleep(2.0)         # banner 后再读 2 秒，收集 decide 日志
                 buf += ser.read(ser.in_waiting)
@@ -132,7 +132,7 @@ def judge_stays_iap(txt, saw_banner):
 def judge_runs_app(txt, saw_banner):
     """判定「不变砖」：bootloader 活着 + 跳转 APP 且 APP 在跑。"""
     jumped = "decision: JUMP" in txt
-    alive = "alive" in txt or "LUMOS APP" in txt
+    alive = "alive" in txt or "Bootloader-Everywhere APP" in txt
     ok = saw_banner and jumped and alive
     print()
     print("  判定: banner=%s 跳转=%s APP活着=%s" % (saw_banner, jumped, alive))

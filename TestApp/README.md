@@ -1,4 +1,4 @@
-# TestApp —— LUMOS-bootloader 的测试 APP
+# TestApp —— Bootloader-Everywhere 的测试 APP
 
 一个**最小但真实**的 APP，用来验证 Bootloader 的完整升级链路：
 
@@ -52,7 +52,7 @@ python TestApp/tools/ymodem_send.py COM3 build/app_test.bin
 预期输出：
 
 ```
-===== LUMOS APP (test) =====
+===== Bootloader-Everywhere APP (test) =====
 [app] running at  : 0x08004531
 [app] SCB->VTOR   : 0x08004000
 [app] PCLK2      : 84000 kHz

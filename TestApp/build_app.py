@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-构建 LUMOS-bootloader 的测试 APP。
+构建 Bootloader-Everywhere 的测试 APP。
 
 产物链接到 0x08004000（BL_APP_BASE），供 Bootloader 通过 YMODEM 升级。
 
@@ -21,7 +21,7 @@ import sys
 
 # ---- 路径 ------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)                      # .../LUMOS-bootloader
+ROOT = os.path.dirname(HERE)                      # .../Bootloader-Everywhere
 
 KEIL = os.environ.get(
     "KEIL_ARMCLANG_BIN",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-板端测试驱动 —— LUMOS-bootloader 的自动化测试基础设施
+板端测试驱动 —— Bootloader-Everywhere 的自动化测试基础设施
 
 把「烧写 → 进 IAP → 升级 → 观察」这一串动作封成命令，避免每次测试都
 临时拼脚本。
@@ -39,9 +39,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from ymodem_send import YmodemSender        # noqa: E402
 
-ROOT = os.path.dirname(os.path.dirname(HERE))          # .../LUMOS-bootloader
-DEFAULT_HEX = os.path.join(ROOT, "MDK-ARM", "LUMOS-bootloader",
-                           "LUMOS-bootloader.hex")
+ROOT = os.path.dirname(os.path.dirname(HERE))          # .../Bootloader-Everywhere
+DEFAULT_HEX = os.path.join(ROOT, "MDK-ARM", "Bootloader-Everywhere",
+                           "Bootloader-Everywhere.hex")
 DEFAULT_BAUD = 115200
 
 # SCB->AIRCR：VECTKEY | SYSRESETREQ
@@ -222,8 +222,8 @@ def cmd_run(args):
 
     txt = raw.decode('utf-8', 'replace')
     print("\n--- 摘要 ---")
-    print("  bootloader 启动     : %d 次" % txt.count('LUMOS-bootloader'))
-    print("  APP 启动            : %d 次" % txt.count('LUMOS APP'))
+    print("  bootloader 启动     : %d 次" % txt.count('== Bootloader-Everywhere =='))
+    print("  APP 启动            : %d 次" % txt.count('Bootloader-Everywhere APP'))
     print("  进入窗口 (IAP_TIMED): %d 次" % txt.count('IAP_TIMED'))
     print("  窗口超时跳回 APP    : %d 次" % txt.count('upgrade window timeout'))
     causes = re.findall(r'reset cause = (\d)', txt)
@@ -257,7 +257,7 @@ def observe_on(ser, seconds):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="LUMOS-bootloader 板端测试驱动")
+    ap = argparse.ArgumentParser(description="Bootloader-Everywhere 板端测试驱动")
     ap.add_argument("--port", default="COM3")
     ap.add_argument("--target", default="stm32f401retx")
     sub = ap.add_subparsers(dest="cmd", required=True)

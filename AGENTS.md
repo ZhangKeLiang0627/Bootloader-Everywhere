@@ -1,4 +1,4 @@
-# AGENTS.md — LUMOS-bootloader 项目接手指南
+# AGENTS.md — Bootloader-Everywhere 项目接手指南
 
 > 写给接手的 AI（Agent）：**只看这一份就能理解项目、继续开发、移植新芯片。**
 > 使用者文档是 `USER.md`；库的权威文档是 `Bootloader/README.md`。
@@ -33,7 +33,7 @@ Bootloader/            ★ 库本体，5 个文件，0 子目录
 tools/                 开发工具（不属于库）
   build.py               命令行编译 + 量 ROM（armclang / armlink / fromelf）
   board.py               pyocd 板端操作（备份/烧写/擦除/看串口）
-Core/ Drivers/ MDK-ARM/ LUMOS-bootloader.ioc
+Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
                        STM32F401 示例工程（CubeMX + Keil），非库的一部分
 TestApp/               （仅 test-app 分支）测试 APP + 板端测试脚本
 build/                 编译产物
@@ -92,8 +92,8 @@ APP 侧不需要库提供任何接口：检测到关键字（默认 `#Bootloader
 ### 4.1 Keil（AC6）
 
 ```
-UV4 -r MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o build.log    # 全量重建
-UV4 -f MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o flash.log    # 编译 + 下载
+UV4 -r MDK-ARM/Bootloader-Everywhere.uvprojx -j0 -o build.log    # 全量重建
+UV4 -f MDK-ARM/Bootloader-Everywhere.uvprojx -j0 -o flash.log    # 编译 + 下载
 ```
 
 > ⚠️ **`-f` 不保证重编改动过的文件**。改过源文件后验证必须用 `-r`，

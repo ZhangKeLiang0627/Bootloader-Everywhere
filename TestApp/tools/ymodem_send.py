@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-YMODEM-1K 发送端 —— LUMOS-bootloader 的串口升级上位机（命令行版）
+YMODEM-1K 发送端 —— Bootloader-Everywhere 的串口升级上位机（命令行版）
 
 用法：
     python ymodem_send.py COM3 build/app_test.bin
@@ -278,7 +278,7 @@ class YmodemSender:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="YMODEM-1K 发送端（LUMOS-bootloader 上位机）")
+    ap = argparse.ArgumentParser(description="YMODEM-1K 发送端（Bootloader-Everywhere 上位机）")
     ap.add_argument("port", nargs="?", help="串口，如 COM3")
     ap.add_argument("file", nargs="?", help="要发送的 .bin")
     ap.add_argument("-b", "--baud", type=int, default=115200, help="波特率，默认 115200")

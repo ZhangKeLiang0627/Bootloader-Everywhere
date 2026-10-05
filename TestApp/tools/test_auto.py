@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-自动化暴力测试编排 —— LUMOS-bootloader
+自动化暴力测试编排 —— Bootloader-Everywhere
 
 覆盖「不需要手动断电」的核心链路，逐项判定 PASS / FAIL 并输出汇总。
 断电类测试（需 USB 继电器或手动拔插）不在本范围内。
@@ -30,7 +30,7 @@ from board_test import (DEFAULT_BAUD, enter_iap, open_probe,
 from ymodem_send import YmodemSender, crc16_xmodem           # noqa: E402
 from ymodem_send import SOH, STX                             # noqa: E402
 
-ROOT = os.path.dirname(os.path.dirname(HERE))          # .../LUMOS-bootloader
+ROOT = os.path.dirname(os.path.dirname(HERE))          # .../Bootloader-Everywhere
 BUILD = os.path.join(ROOT, "build")
 PORT = "COM3"
 TARGET = "stm32f401retx"
@@ -131,7 +131,7 @@ def reset_and_capture(seconds=5.0):
                     if b:
                         buf += b
                 time.sleep(0.01)
-            if b"LUMOS-bootloader" in buf:
+            if b"== Bootloader-Everywhere ==" in buf:
                 break
         return bytes(buf)
     finally:
@@ -166,7 +166,7 @@ def ensure_app_running():
         ser.reset_input_buffer()
         pin_reset()
         txt = read_for(ser, 2.5).decode("utf-8", "replace")
-        if "alive" in txt or "LUMOS APP" in txt:
+        if "alive" in txt or "Bootloader-Everywhere APP" in txt:
             return True
     finally:
         ser.close()
@@ -286,7 +286,7 @@ def main():
         only = sys.argv[sys.argv.index("--only") + 1]
 
     print("=" * 64)
-    print("LUMOS-bootloader 自动化暴力测试")
+    print("Bootloader-Everywhere 自动化暴力测试")
     print("=" * 64)
     print("固件路径: %s" % BUILD)
     print("串口: %s  目标: %s" % (PORT, TARGET))
