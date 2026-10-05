@@ -72,7 +72,7 @@ void putNumber(uint32_t v, bool hex, uint32_t width, bool zeroPad) noexcept
 
 } // namespace
 
-// 支持 %d %X %s %%，可带 0 与宽度修饰（如 %08lX）。不支持浮点。
+// 支持 %u %d %X %s %%，可带 0 与宽度修饰（如 %08lX）。不支持浮点。
 void printf(const char* fmt, ...) noexcept
 {
 #if BL_DEBUG_LOG
@@ -120,6 +120,10 @@ void printf(const char* fmt, ...) noexcept
                 v = -v;
             }
             putNumber(static_cast<uint32_t>(v), false, width, zeroPad);
+        } else if (*p == 'u') {
+            const uint32_t v = isLong ? static_cast<uint32_t>(va_arg(ap, unsigned long))
+                                      : static_cast<uint32_t>(va_arg(ap, unsigned int));
+            putNumber(v, false, width, zeroPad);
         } else if (*p == 'X') {
             const uint32_t v = isLong ? static_cast<uint32_t>(va_arg(ap, unsigned long))
                                       : static_cast<uint32_t>(va_arg(ap, unsigned int));
