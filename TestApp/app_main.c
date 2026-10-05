@@ -302,17 +302,20 @@ static void delay_ms(uint32_t ms)
 /* ========================================================================
  * 「进入 Bootloader」的软件请求
  *
- * 与 Bootloader/bl_app.h 的 bl_request_update() 是同一套约定：只做软件
- * 复位，不写任何标志。Bootloader 靠复位原因（软件复位 + 固件 Valid 态）
- * 识别唤回，进入限时升级窗口（默认 15s）。
+ * 与库的 bl_request_update() 是同一套约定：只做软件复位，不写任何标志。
+ * Bootloader 靠复位原因（软件复位 + 固件 Valid 态）识别唤回，进入限时
+ * 升级窗口（默认 15s）。
  *
- * 这里不 include bl_app.h，是因为本测试 APP 刻意不依赖 CMSIS（纯寄存器）。
- * 真实 APP 直接 include bl_app.h 调 bl_request_update() 即可。
+ * 这里不 include bl.h，是因为本测试 APP 刻意零依赖（纯寄存器）。
+ * 真实 APP 直接 include "bl.h" 调 bl_request_update() 即可。
  * ======================================================================*/
+#define SCB_AIRCR           REG32(0xE000ED0CUL)     /* SCB->AIRCR */
+#define AIRCR_VECTKEY       (0x05FAUL << 16)        /* 写入钥匙，必须携带 */
+#define AIRCR_SYSRESETREQ   (1UL << 2)              /* 置 1 触发软件复位 */
+
 static void request_update(void)
 {
-    /* SCB->AIRCR = VECTKEY | SYSRESETREQ（软件复位，SRAM 不丢） */
-    REG32(0xE000ED0CUL) = 0x05FA0004UL;
+    SCB_AIRCR = AIRCR_VECTKEY | AIRCR_SYSRESETREQ;
     __asm volatile ("dsb");
     for (;;) { }                                /* 兜底 */
 }

@@ -132,9 +132,9 @@ for i in range(8):
 ## 关于「进入 Bootloader」
 
 本 APP 运行中会在主循环轮询串口，逐字节匹配关键字
-`#Bootloader-Everywhere`；匹配完整就做一次软件复位（`NVIC_SystemReset`）。
+`#Bootloader-Everywhere`；匹配完整就写 `SCB->AIRCR` 触发一次软件复位。
 Bootloader 靠复位原因识别「软件复位 + 固件 Valid 态」，进入 15s 限时升级
 窗口 —— 这就是网页端「点开始升级自动唤回」的板端对应实现。
 
-真实 APP 接入只需 `#include "bl_app.h"` 并自己匹配关键字后调
-`bl_request_update()`（只依赖 CMSIS）。
+真实 APP 接入只需 `#include "bl.h"` 并自己匹配关键字后调
+`bl_request_update()`（零依赖，不需要 CMSIS）。
