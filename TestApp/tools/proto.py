@@ -287,9 +287,17 @@ def send(args):
                 if expect >= addr0 and expect < addr0 + len(body):
                     offset = expect - addr0          # 断点续传
                 continue
-            if dev_crc != cum:
-                print("  ★ 帧 %d 从机回读 CRC32 = 0x%08X，与主机 0x%08X 不符" % (idx, dev_crc, cum))
-                return 1
+            # 只在「从机确认的正是本帧」时才比对它回读的累积 CRC32。
+            # 若从机报的是别的位置（主机重传了上一帧、或发了一个更早的地址），
+            # 那是让它重新对表、按它的位置续传，做 CRC 比对没有意义。
+            if expect == addr + len(data):
+                if dev_crc != cum:
+                    print("  ★ 帧 %d 从机回读 CRC32 = 0x%08X，与主机 0x%08X 不符"
+                          % (idx, dev_crc, cum))
+                    return 1
+            elif expect != addr:
+                print("  ← 从机已在 0x%08X（本帧 0x%08X），按从机位置重同步"
+                      % (expect, addr))
             last_ack = expect
             offset = expect - addr0
             if args.progress and (idx % args.progress == 0 or offset >= len(body)):

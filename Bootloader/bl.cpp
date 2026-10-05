@@ -355,6 +355,11 @@ constexpr uint16_t kBlockSize = BL_BLOCK_SIZE;
 static_assert(kBlockSize > 0U && kBlockSize <= (proto::kDataMax - kDataHead),
               "BL_BLOCK_SIZE 放不进载体 Data 区（上限 1024 - 14）");
 
+// 总包数字段是 2 字节，编译期挡一下：APP 区分区变大到超过 65535 个块时，
+// 这个字段会静默截断（主机与从机对不上，升级必然失败）。
+static_assert(((BL_APP_SIZE / kBlockSize) + 1U) <= 0xFFFFU,
+              "BL_APP_SIZE / BL_BLOCK_SIZE 超过 uint16，总包数字段会截断");
+
 } // namespace
 
 // 一次升级会话：等 START → 逐帧收 → END 提交。
@@ -389,9 +394,7 @@ private:
     State         state_ = State::Idle;
     proto::Parser parser_;
     proto::Frame  frame_;
-    uint8_t       tx_[32];
-    uint8_t       lastReply_[24];
-    uint16_t      lastReplyLen_ = 0U;
+    uint8_t       tx_[32];           // 应答帧上限 32 字节（设计文档 §0.1）
 
     uint32_t declaredSize_ = 0U;     // START 声明的镜像大小
     uint32_t declaredCrc_  = 0U;     // START 声明的整镜像 CRC32
@@ -447,10 +450,14 @@ bool Session::readFrame(uint32_t timeoutMs) noexcept
     }
 }
 
+// bodyLen 上限 24：应答总长 = 7（外壳）+ 1（状态码）+ body ≤ 32，见设计文档 §0.1
 void Session::reply(uint8_t cmd, uint8_t code, const void* body, uint16_t bodyLen) noexcept
 {
-    uint8_t pay[16];
+    uint8_t pay[25];
 
+    if (bodyLen > (sizeof(pay) - 1U)) {
+        return;                                 // 越界的应答宁可不发，也不能踩栈
+    }
     pay[0] = code;
     if (bodyLen > 0U && body != nullptr) {
         std::memcpy(&pay[1], body, bodyLen);
@@ -464,11 +471,6 @@ void Session::reply(uint8_t cmd, uint8_t code, const void* body, uint16_t bodyLe
         return;
     }
     (void)uartWrite(tx_, n);
-
-    if (n <= sizeof(lastReply_)) {              // 留一份用于幂等重发
-        std::memcpy(lastReply_, tx_, n);
-        lastReplyLen_ = static_cast<uint16_t>(n);
-    }
 }
 
 void Session::replyCode(uint8_t cmd, uint8_t code) noexcept
@@ -554,10 +556,14 @@ void Session::onData(const proto::Frame& f) noexcept
         return;
     }
 
-    if (addr < nextAddr_) {                     // 重复帧（上次应答丢了）：不重写，重发上次应答
-        if (lastReplyLen_ > 0U) {
-            (void)uartWrite(lastReply_, lastReplyLen_);
-        }
+    if (addr < nextAddr_) {                     // 重复帧（上次应答丢了）：不重写，重发应答
+        // 这里**按当前状态重建**应答，而不是"存一份上次应答再原样发回"。
+        // 存副本的做法有个真板实测出来的坑：那个缓冲是全局的，任何一条别的命令
+        // （STATUS 查询、未知命令）都会把它覆盖 —— 主机随后重传数据帧时，
+        // 收到的是那条命令的应答（命令码对不上），于是主机只能超时重试。
+        // crc_ 与 nextAddr_ 只在「帧被接受」时推进，所以按它们重建的结果与
+        // 上次成功应答逐字节相同，而且天然幂等。
+        replyData(static_cast<uint8_t>(Code::Ok));
         return;
     }
     if (addr != nextAddr_) {                    // 跳号：告诉主机从哪里续发
@@ -668,7 +674,6 @@ Session::Result Session::run(uint32_t waitStartMs) noexcept
     state_      = State::Idle;
     erased_     = false;
     done_       = false;
-    lastReplyLen_ = 0U;
     crc_.reset();
     parser_.reset();
     uartFlushRx();                              // 清接收路径并打开接收中断
