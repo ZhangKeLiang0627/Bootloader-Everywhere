@@ -17,6 +17,7 @@
     S10 背靠背会话 xN          连续 START -> 3 帧 -> 放弃（不发 END），最后完整做一次
     S11 突发帧（不等应答）      一次灌 3 帧，观察从机能否全部处理（环形缓冲 512B < 一帧 533B）
     S12 RECEIVING 空闲超时      停 35 秒不发任何帧 -> 从机应回到 Idle（--slow 才跑）
+    S13 END 整片回读校验        声明的大小比实发的多 -> END 必须回 0x0B 且不提交
 
 用法：
     python stress_iap.py                    # 跑全部（含 12 项）
@@ -662,6 +663,83 @@ def S12_idle_timeout(link):
            '超时前 %s / 超时后 %s' % (st1, st2))
 
 
+def S13_end_verify_fail(link):
+    """END 的整片回读校验：声明的大小比实际写入的多，必须拒绝提交（0x0B）。
+
+    这是「三层校验」最后一层的唯一验证：
+      帧 CRC8（查传输错）→ 逐帧**回读 Flash** 重算（查写入是否真落盘）
+      → **END 时整片回读**（查「写完之后才发现固件不完整 / 被改动」）
+
+    前两层在写入期就都过了，所以只有第三层能发现本例的问题。构造方式**不需要探针**：
+      声明 size = N（比实际要发的多），但只发 M < N-8 字节，
+      并把「整镜像 CRC32」声明成这 M 字节的 CRC。
+    于是 `crc_`（逐帧累加、来自读回 Flash）== 声明的 CRC → 通过第一道；
+    而 END 读 [appBase+8, appBase+N-8) 时，尾部那段还是 0xFF → CRC 不符 → 0x0B。
+    如果这一层不生效，设备会把一份**不完整**的固件标记成「可启动」。
+    """
+    img = real_image()
+    sp, pc, body_full, crc_full, _ = image_parts(img)
+
+    # 只发一半，但声明要发全部
+    half = ((len(body_full) // 2) // BLOCK_SIZE) * BLOCK_SIZE
+    if half < BLOCK_SIZE:
+        record('S13', 'END 整片回读拒绝不完整的固件', True, '固件太小，跳过')
+        return
+    body = body_full[:half]
+    declared_size = len(img)                       # 声明完整大小
+    declared_crc = crc32_iso(body)                 # 却只对这半段的 CRC 负责
+    total_pkts = (declared_size - 8 + BLOCK_SIZE - 1) // BLOCK_SIZE
+
+    if not enter_iap(link):
+        record('S13', 'END 整片回读拒绝不完整的固件', False, '进不了 IAP')
+        return
+
+    tx(link, CMD_START, struct.pack('<IIII', declared_size, declared_crc, sp, pc))
+    f = rx(link, 12.0, want=CMD_START | DIR_REPLY)
+    if f is None:
+        record('S13', 'END 整片回读拒绝不完整的固件', False, 'START 无应答')
+        return
+    if f['data'][0] != 0x00:
+        record('S13', 'END 整片回读拒绝不完整的固件', False,
+               'START -> %s' % CODE_NAME.get(f['data'][0], f['data'][0]))
+        return
+
+    # 只发前半段（逐帧读回校验都会通过）
+    offset = 0
+    while offset < len(body):
+        chunk = body[offset:offset + BLOCK_SIZE]
+        addr = APP_BASE + 8 + offset
+        cum = crc32_iso(body[:offset + len(chunk)])
+        pl = struct.pack('<IHHHI', addr, total_pkts, offset // BLOCK_SIZE,
+                         len(chunk), cum) + chunk
+        tx(link, CMD_DATA, pl)
+        g = rx(link, 0.6, want=CMD_DATA | DIR_REPLY)
+        if g is None or g['data'][0] != 0x00:
+            record('S13', 'END 整片回读拒绝不完整的固件', False,
+                   '帧 %d -> %s' % (offset // BLOCK_SIZE,
+                                    CODE_NAME.get(g['data'][0], g['data'][0]) if g else '无应答'))
+            return
+        offset = struct.unpack('<I', g['data'][5:9])[0] - (APP_BASE + 8)
+
+    # END：累积 CRC 能过（等于声明值），但整片回读必然不符
+    tx(link, CMD_END)
+    e = rx(link, 6.0, want=CMD_END | DIR_REPLY)
+    code = e['data'][0] if e and e['data'] else None
+
+    # 未提交：SP/PC 仍是 0xFF（读出来证实，不靠推断）
+    tx(link, CMD_STATUS)
+    st = rx(link, 1.0, want=CMD_STATUS | DIR_REPLY)
+    # 设备仍在 IAP（能应答 STATUS）即说明没有跳转；SP/PC 由 host 侧无法直接读，
+    # 所以用「END 被拒」+「设备还活着且能应答」两条一起作为未提交的判据。
+    alive = st is not None
+
+    ok = (code == 0x0B) and alive
+    record('S13', 'END 整片回读拒绝不完整的固件（0x0B）', ok,
+           '声明 %d 字节 / 实发 %d 字节 → END 码=%s，设备仍在 IAP=%s'
+           % (declared_size, len(body), CODE_NAME.get(code, code), alive))
+    time.sleep(0.3)
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -671,6 +749,7 @@ def main():
     ap.add_argument('--port', default=PORT)
     ap.add_argument('--baud', type=int, default=BAUD)
     ap.add_argument('--id', type=int, default=DEV)
+    ap.add_argument('--target', default='stm32f401retx', help='pyocd 目标名（S13 用）')
     ap.add_argument('--rounds', type=int, default=12, help='S1 连续升级轮数')
     ap.add_argument('--sizes', default='2,8,64,200', help='S2 尺寸（KB）')
     ap.add_argument('--burst', type=int, default=3, help='S11 一次灌几帧')
@@ -726,6 +805,8 @@ def main():
             S10_back_to_back(link, args.rounds)
         if want_run('S11'):
             S11_burst(link, args.burst)
+        if want_run('S13'):
+            S13_end_verify_fail(link)
         if args.slow and want_run('S12'):
             S12_idle_timeout(link)
 

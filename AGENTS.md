@@ -306,8 +306,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   宿主只需在 `USART1_IRQHandler` 里调 `blUartRx()`，**不要**再调 `HAL_UART_IRQHandler`。
 - 上位机 `TestApp/tools/proto.py`；板端测试四个脚本：`test_proto.py`（T1-T5 正常路径）、
   `test_proto_edge.py`（E1-E15 边界与畸形输入）、`test_proto_perf.py`（耗时实测）、
-  `stress_iap.py`（S1-S12 压测：连续升级 / 逐帧错误注入 / 应答丢失幂等 /
-  重放污染探测 / 跳号续传 / 背靠背会话 / 突发帧 / 空闲超时）。
+  `stress_iap.py`（S1-S13 压测：连续升级 / 逐帧错误注入 / 应答丢失幂等 /
+  重放污染探测 / 跳号续传 / 背靠背会话 / 突发帧 / 空闲超时 / END 整片回读校验）。
   载体层另有 PC 侧压测 `tools/stress_protocol.cpp`（fuzz + 突变 + 恢复能力）。
 - 性能对比（与 YMODEM / esptool / mcumgr / OpenBLT / UDS）见 `docs/PERF_COMPARISON.md`：
   纯协议效率不是瓶颈（换成最省的 YMODEM 也只快 1.2 秒/200KB），
