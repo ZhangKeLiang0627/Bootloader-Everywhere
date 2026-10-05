@@ -137,4 +137,4 @@ Bootloader 靠复位原因识别「软件复位 + 固件 Valid 态」，进入 1
 窗口 —— 这就是网页端「点开始升级自动唤回」的板端对应实现。
 
 真实 APP 接入只需 `#include "bl.h"` 并自己匹配关键字后调
-`bl_request_update()`（零依赖，不需要 CMSIS）。
+`blRequestUpdate()`（零依赖，不需要 CMSIS）。

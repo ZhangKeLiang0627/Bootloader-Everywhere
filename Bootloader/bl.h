@@ -16,7 +16,7 @@
  *
  *   3. 在你的 main 里调一句：
  *          #include "bl.h"
- *          int main(void) { bl_run(); }        // 不会返回
+ *          int main(void) { blRun(); }        // 不会返回
  *      或者让库自带 main()：什么都不用写（bl_config.h 里 BL_PROVIDE_MAIN=1）
  *
  * ============================================================================
@@ -31,8 +31,8 @@
  *  本文件提供什么
  * ============================================================================
  *
- *   bl_run()             Bootloader 主入口（调了就不返回）
- *   bl_request_update()  APP 侧用：请求回到 Bootloader 刷机（可选）
+ *   blRun()             Bootloader 主入口（调了就不返回）
+ *   blRequestUpdate()  APP 侧用：请求回到 Bootloader 刷机（可选）
  *   Status / FwState / IapResult   公共类型
  *   BL_LOG(...)          轻量日志宏（定义在 bl_config.h）
  */
@@ -84,7 +84,7 @@ enum class FwState : uint32_t {
 
 constexpr bool bootable(FwState s) noexcept { return s == FwState::Valid; }
 
-constexpr const char* to_string(FwState s) noexcept
+constexpr const char* toString(FwState s) noexcept
 {
     return (s == FwState::Invalid)  ? "INVALID"  :
            (s == FwState::Download) ? "DOWNLOAD" :
@@ -120,10 +120,10 @@ void printf(const char* fmt, ...) noexcept;
  * 向量表检查结果（判断 APP 到底能不能启动）
  * ==========================================================================*/
 struct VectorCheck {
-    uint32_t initial_sp;      ///< 初始栈顶（向量表第 0 个字）
-    uint32_t reset_handler;   ///< 复位入口（向量表第 1 个字）
-    bool     sp_in_sram;      ///< 栈顶是否落在合法 RAM 内
-    bool     entry_is_thumb;  ///< 入口是否为 Thumb 地址（最低位为 1）
+    uint32_t initialSp;      ///< 初始栈顶（向量表第 0 个字）
+    uint32_t resetHandler;   ///< 复位入口（向量表第 1 个字）
+    bool     spInSram;      ///< 栈顶是否落在合法 RAM 内
+    bool     entryIsThumb;  ///< 入口是否为 Thumb 地址（最低位为 1）
 };
 
 } // namespace bl
@@ -143,7 +143,7 @@ extern "C" {
  *   2. 决定「跳 APP」还是「留在 IAP」
  *   3. 留在 IAP 时循环等 YMODEM 刷机；升级成功后直接跳新固件
  */
-void bl_run(void);
+void blRun(void);
 
 #ifdef __cplusplus
 }
@@ -154,7 +154,7 @@ void bl_run(void);
  *
  * 想让「运行中的 APP」被网页一键唤回刷机，就在你的 APP 里：
  *   1. 串口逐字节匹配关键字 BL_BOOT_MAGIC_STRING（状态机，匹配完整才算）
- *   2. 匹配成功就调 bl_request_update()
+ *   2. 匹配成功就调 blRequestUpdate()
  *
  * Bootloader 靠「复位原因 = 软件复位 + 固件 Valid」识别这次唤回，
  * 然后开一个限时窗口等上位机。不需要这个功能就整段忽略。
@@ -182,7 +182,7 @@ void bl_run(void);
 /**
  * @brief 请求进入 Bootloader：只做一次软件复位，不写任何标志。
  */
-static inline void bl_request_update(void)
+static inline void blRequestUpdate(void)
 {
     BL_SCB_AIRCR = BL_AIRCR_VECTKEY | BL_AIRCR_SYSRESETREQ;
     for (;;) { }          /* 兜底：复位是异步的，这里不会往下走 */

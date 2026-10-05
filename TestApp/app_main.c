@@ -302,12 +302,12 @@ static void delay_ms(uint32_t ms)
 /* ========================================================================
  * 「进入 Bootloader」的软件请求
  *
- * 与库的 bl_request_update() 是同一套约定：只做软件复位，不写任何标志。
+ * 与库的 blRequestUpdate() 是同一套约定：只做软件复位，不写任何标志。
  * Bootloader 靠复位原因（软件复位 + 固件 Valid 态）识别唤回，进入限时
  * 升级窗口（默认 15s）。
  *
  * 这里不 include bl.h，是因为本测试 APP 刻意零依赖（纯寄存器）。
- * 真实 APP 直接 include "bl.h" 调 bl_request_update() 即可。
+ * 真实 APP 直接 include "bl.h" 调 blRequestUpdate() 即可。
  * ======================================================================*/
 #define SCB_AIRCR           REG32(0xE000ED0CUL)     /* SCB->AIRCR */
 #define AIRCR_VECTKEY       (0x05FAUL << 16)        /* 写入钥匙，必须携带 */

@@ -45,7 +45,7 @@ namespace bl {
 namespace stm32f4 {
 
 /// 等发送移位寄存器空（跳转前调用，避免最后几行日志被打断）
-void console_tx_flush(uint32_t timeout_ms) noexcept;
+void consoleTxFlush(uint32_t timeoutMs) noexcept;
 
 } // namespace stm32f4
 
@@ -91,14 +91,14 @@ static_assert(BL_APB2_DIV == 1 || BL_APB2_DIV == 2 || BL_APB2_DIV == 4 ||
                   BL_APB2_DIV == 8 || BL_APB2_DIV == 16,
               "BL_APB2_DIV 取值非法");
 
-constexpr uint32_t pll_p_enum() noexcept
+constexpr uint32_t pllPEnum() noexcept
 {
     return (BL_PLL_P == 2) ? RCC_PLLP_DIV2 :
            (BL_PLL_P == 4) ? RCC_PLLP_DIV4 :
            (BL_PLL_P == 6) ? RCC_PLLP_DIV6 : RCC_PLLP_DIV8;
 }
 
-constexpr uint32_t ahb_div_enum() noexcept
+constexpr uint32_t ahbDivEnum() noexcept
 {
     return (BL_AHB_DIV == 1)   ? RCC_SYSCLK_DIV1   :
            (BL_AHB_DIV == 2)   ? RCC_SYSCLK_DIV2   :
@@ -110,7 +110,7 @@ constexpr uint32_t ahb_div_enum() noexcept
            (BL_AHB_DIV == 256) ? RCC_SYSCLK_DIV256 : RCC_SYSCLK_DIV512;
 }
 
-constexpr uint32_t apb1_div_enum() noexcept
+constexpr uint32_t apb1DivEnum() noexcept
 {
     return (BL_APB1_DIV == 1)  ? RCC_HCLK_DIV1  :
            (BL_APB1_DIV == 2)  ? RCC_HCLK_DIV2  :
@@ -118,7 +118,7 @@ constexpr uint32_t apb1_div_enum() noexcept
            (BL_APB1_DIV == 8)  ? RCC_HCLK_DIV8 : RCC_HCLK_DIV16;
 }
 
-constexpr uint32_t apb2_div_enum() noexcept
+constexpr uint32_t apb2DivEnum() noexcept
 {
     return (BL_APB2_DIV == 1)  ? RCC_HCLK_DIV1  :
            (BL_APB2_DIV == 2)  ? RCC_HCLK_DIV2  :
@@ -131,7 +131,7 @@ constexpr uint32_t apb2_div_enum() noexcept
  * ==========================================================================*/
 
 /** 按 bl_config.h 建立 HSE + PLL 时钟；HSE 起振失败返回失败（由调用方兜底） */
-Status clock_from_hse() noexcept
+Status clockFromHse() noexcept
 {
     RCC_OscInitTypeDef osc{};
     RCC_ClkInitTypeDef clk{};
@@ -142,7 +142,7 @@ Status clock_from_hse() noexcept
     osc.PLL.PLLSource  = RCC_PLLSOURCE_HSE;
     osc.PLL.PLLM       = BL_PLL_M;
     osc.PLL.PLLN       = BL_PLL_N;
-    osc.PLL.PLLP       = pll_p_enum();
+    osc.PLL.PLLP       = pllPEnum();
     osc.PLL.PLLQ       = BL_PLL_Q;
 
     if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
@@ -152,9 +152,9 @@ Status clock_from_hse() noexcept
     clk.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
                          RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
     clk.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
-    clk.AHBCLKDivider  = ahb_div_enum();
-    clk.APB1CLKDivider = apb1_div_enum();
-    clk.APB2CLKDivider = apb2_div_enum();
+    clk.AHBCLKDivider  = ahbDivEnum();
+    clk.APB1CLKDivider = apb1DivEnum();
+    clk.APB2CLKDivider = apb2DivEnum();
 
     if (HAL_RCC_ClockConfig(&clk, BL_FLASH_LATENCY) != HAL_OK) {
         return Status::Error;
@@ -169,7 +169,7 @@ Status clock_from_hse() noexcept
  * 宁可跑 16MHz 也要能通信 —— 一旦串口通不了，设备就成了砖，
  * 而 16MHz 下 115200 波特率照样工作（HAL 会按实际时钟算分频）。
  */
-Status clock_fallback_hsi() noexcept
+Status clockFallbackHsi() noexcept
 {
     RCC_OscInitTypeDef osc{};
     RCC_ClkInitTypeDef clk{};
@@ -214,7 +214,7 @@ namespace {
  * ST 的 system_stm32f4xx.c 在 SystemInit 里做的第一件事就是它，
  * 这里保持相同的位置与语义：**任何可能用到浮点的代码之前**。
  */
-void fpu_enable() noexcept
+void fpuEnable() noexcept
 {
     SCB->CPACR |= ((3UL << 20) | (3UL << 22));   /* CP10, CP11 全访问 */
     __DSB();
@@ -223,10 +223,10 @@ void fpu_enable() noexcept
 
 } // namespace
 
-Status platform_init() noexcept
+Status platformInit() noexcept
 {
-    /* 0. FPU 必须最先使能 —— 见 fpu_enable 的说明 */
-    fpu_enable();
+    /* 0. FPU 必须最先使能 —— 见 fpuEnable 的说明 */
+    fpuEnable();
 
     /* 1. HAL 底座：中断优先级分组、1ms 时基、HAL_MspInit */
     if (HAL_Init() != HAL_OK) {
@@ -234,9 +234,9 @@ Status platform_init() noexcept
     }
 
     /* 2. 系统时钟 */
-    const bool hse_ok = ok(clock_from_hse());
-    if (!hse_ok) {
-        if (!ok(clock_fallback_hsi())) {
+    const bool hseOk = ok(clockFromHse());
+    if (!hseOk) {
+        if (!ok(clockFallbackHsi())) {
             return Status::Error;
         }
     }
@@ -246,7 +246,7 @@ Status platform_init() noexcept
     SystemCoreClockUpdate();
     (void)HAL_InitTick(TICK_INT_PRIORITY);
 
-    if (!hse_ok) {
+    if (!hseOk) {
         BL_LOG("[clk] HSE failed -> running on HSI 16MHz\r\n");
     }
     BL_LOG("[clk] sysclk=%lu Hz (core clock %lu Hz)\r\n",
@@ -264,7 +264,7 @@ Status platform_init() noexcept
  * 只保留 HAL 时基需要的 SysTick，以及 HAL 底座需要的 MspInit。
  * ==========================================================================*/
 
-/** HAL 的 1ms 时基来源（tick_ms / delay_ms 都靠它） */
+/** HAL 的 1ms 时基来源（tickMs / delayMs 都靠它） */
 extern "C" void SysTick_Handler(void)
 {
     HAL_IncTick();
@@ -326,7 +326,7 @@ static_assert(BL_FLASH_SIZE >= (256U * 1024U),
               "BL_FLASH_SIZE 太小：F4 至少要 256KB 才放得下 16KB Bootloader + 配置区");
 
 /** 地址相对 Flash 起始的偏移 */
-constexpr uint32_t flash_off(uint32_t addr) noexcept
+constexpr uint32_t flashOff(uint32_t addr) noexcept
 {
     return addr - BL_FLASH_BASE;
 }
@@ -335,21 +335,21 @@ constexpr uint32_t flash_off(uint32_t addr) noexcept
  * C++11 的 constexpr 函数体只允许一条 return 语句。 */
 
 /** 地址是否落在本片 Flash 内 */
-constexpr bool in_flash(uint32_t addr) noexcept
+constexpr bool inFlash(uint32_t addr) noexcept
 {
     return addr >= BL_FLASH_BASE && addr < (BL_FLASH_BASE + BL_FLASH_SIZE);
 }
 
 /** 地址所属扇区序号；越界时返回值 >= kSectorCount */
-constexpr uint32_t sector_index(uint32_t addr) noexcept
+constexpr uint32_t sectorIndex(uint32_t addr) noexcept
 {
-    return (flash_off(addr) < kMidBase)   ? (flash_off(addr) / kSmallSize) :
-           (flash_off(addr) < kLargeBase) ? kSmallCount :
-           (kSmallCount + 1U + (flash_off(addr) - kLargeBase) / kLargeSize);
+    return (flashOff(addr) < kMidBase)   ? (flashOff(addr) / kSmallSize) :
+           (flashOff(addr) < kLargeBase) ? kSmallCount :
+           (kSmallCount + 1U + (flashOff(addr) - kLargeBase) / kLargeSize);
 }
 
 /** 扇区起始地址 */
-constexpr uint32_t sector_base(uint32_t idx) noexcept
+constexpr uint32_t sectorBase(uint32_t idx) noexcept
 {
     return (idx < kSmallCount)  ? (BL_FLASH_BASE + idx * kSmallSize) :
            (idx == kSmallCount) ? (BL_FLASH_BASE + kMidBase) :
@@ -357,7 +357,7 @@ constexpr uint32_t sector_base(uint32_t idx) noexcept
 }
 
 /** 扇区大小 */
-constexpr uint32_t sector_size(uint32_t idx) noexcept
+constexpr uint32_t sectorSize(uint32_t idx) noexcept
 {
     return (idx < kSmallCount)  ? kSmallSize :
            (idx == kSmallCount) ? kMidSize : kLargeSize;
@@ -368,32 +368,32 @@ constexpr uint32_t sector_size(uint32_t idx) noexcept
 /* ============================================================================
  * 初始化
  * ==========================================================================*/
-Status flash_init() noexcept
+Status flashInit() noexcept
 {
     /* F4 的 Flash 接口时钟由 HAL_Init 打开，这里只需确保处于锁定态 */
     HAL_FLASH_Lock();
     return Status::Ok;
 }
 
-uint32_t flash_sector_size(uint32_t addr) noexcept
+uint32_t flashSectorSize(uint32_t addr) noexcept
 {
-    if (!in_flash(addr)) {
+    if (!inFlash(addr)) {
         return 0U;
     }
-    const uint32_t idx = sector_index(addr);
-    return (idx < kSectorCount) ? sector_size(idx) : 0U;
+    const uint32_t idx = sectorIndex(addr);
+    return (idx < kSectorCount) ? sectorSize(idx) : 0U;
 }
 
-uint32_t flash_bytes_to_sector_end(uint32_t addr) noexcept
+uint32_t flashBytesToSectorEnd(uint32_t addr) noexcept
 {
-    if (!in_flash(addr)) {
+    if (!inFlash(addr)) {
         return 0U;
     }
-    const uint32_t idx = sector_index(addr);
+    const uint32_t idx = sectorIndex(addr);
     if (idx >= kSectorCount) {
         return 0U;
     }
-    return (sector_base(idx) + sector_size(idx)) - addr;
+    return (sectorBase(idx) + sectorSize(idx)) - addr;
 }
 
 /* ============================================================================
@@ -403,7 +403,7 @@ uint32_t flash_bytes_to_sector_end(uint32_t addr) noexcept
  * 并额外拒绝擦除 Bootloader 自身 —— 就算上层逻辑写出 bug，
  * 也不可能把「重刷入口」擦掉。
  * ==========================================================================*/
-Status flash_erase(uint32_t addr, uint32_t len) noexcept
+Status flashErase(uint32_t addr, uint32_t len) noexcept
 {
     if (len == 0U) {
         return Status::Ok;
@@ -413,15 +413,15 @@ Status flash_erase(uint32_t addr, uint32_t len) noexcept
         BL_LOG("[flash] refuse to erase bootloader region\r\n");
         return Status::BadParam;
     }
-    if (!in_flash(addr) || !in_flash(addr + len - 1U)) {
+    if (!inFlash(addr) || !inFlash(addr + len - 1U)) {
         BL_LOG("[flash] erase out of flash range: 0x%08lX +%lu\r\n",
                static_cast<unsigned long>(addr),
                static_cast<unsigned long>(len));
         return Status::BadParam;
     }
 
-    const uint32_t first = sector_index(addr);
-    if (first >= kSectorCount || addr != sector_base(first)) {
+    const uint32_t first = sectorIndex(addr);
+    if (first >= kSectorCount || addr != sectorBase(first)) {
         BL_LOG("[flash] erase addr not sector-aligned: 0x%08lX\r\n",
                static_cast<unsigned long>(addr));
         return Status::BadParam;
@@ -432,12 +432,12 @@ Status flash_erase(uint32_t addr, uint32_t len) noexcept
     uint32_t count     = 0;
     uint32_t cur       = addr;
     while (remaining > 0U) {
-        const uint32_t idx = sector_index(cur);
-        if (idx >= kSectorCount || cur != sector_base(idx)) {
+        const uint32_t idx = sectorIndex(cur);
+        if (idx >= kSectorCount || cur != sectorBase(idx)) {
             BL_LOG("[flash] erase len not sector-multiple\r\n");
             return Status::BadParam;
         }
-        const uint32_t sz = sector_size(idx);
+        const uint32_t sz = sectorSize(idx);
         if (remaining < sz) {
             BL_LOG("[flash] erase len not sector-multiple\r\n");
             return Status::BadParam;
@@ -455,15 +455,15 @@ Status flash_erase(uint32_t addr, uint32_t len) noexcept
     erase.Sector       = first;
     erase.NbSectors    = count;
 
-    uint32_t sector_error = 0;
-    const HAL_StatusTypeDef rc = HAL_FLASHEx_Erase(&erase, &sector_error);
+    uint32_t sectorError = 0;
+    const HAL_StatusTypeDef rc = HAL_FLASHEx_Erase(&erase, &sectorError);
 
     HAL_FLASH_Lock();
 
-    if (rc != HAL_OK || sector_error != 0xFFFFFFFFUL) {
+    if (rc != HAL_OK || sectorError != 0xFFFFFFFFUL) {
         BL_LOG("[flash] erase error rc=%d sectorErr=0x%08lX\r\n",
                static_cast<int>(rc),
-               static_cast<unsigned long>(sector_error));
+               static_cast<unsigned long>(sectorError));
         return Status::FlashFail;
     }
     return Status::Ok;
@@ -476,7 +476,7 @@ Status flash_erase(uint32_t addr, uint32_t len) noexcept
  * （YMODEM 数据区天然对齐、配置区槽为 64 字节），但这里仍处理尾巴不足
  * 一个字的情况：读出原字 → 合并 → 写回。
  * ==========================================================================*/
-Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept
+Status flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept
 {
     if (data == nullptr || len == 0U) {
         return Status::BadParam;
@@ -529,7 +529,7 @@ Status flash_write(uint32_t addr, const void* data, uint32_t len) noexcept
 /* ============================================================================
  * 读取（Flash 内存映射，直接拷贝）
  * ==========================================================================*/
-Status flash_read(uint32_t addr, void* buf, uint32_t len) noexcept
+Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept
 {
     if (buf == nullptr || len == 0U) {
         return Status::BadParam;
@@ -545,11 +545,11 @@ Status flash_read(uint32_t addr, void* buf, uint32_t len) noexcept
 namespace {
 
 /** 控制台串口句柄：由本文件独占持有 */
-UART_HandleTypeDef g_uart{};
+UART_HandleTypeDef gUart{};
 
-/** 配置 TX/RX 引脚复用。放在 uart_init 里而不是 MspInit，
+/** 配置 TX/RX 引脚复用。放在 uartInit 里而不是 MspInit，
  *  是为了让整个适配层不依赖 HAL 的回调约定，调用路径更直白。 */
-void gpio_setup() noexcept
+void gpioSetup() noexcept
 {
     BL_UART_GPIO_CLK_ENABLE();
     BL_UART_CLK_ENABLE();
@@ -567,11 +567,11 @@ void gpio_setup() noexcept
 
 namespace stm32f4 {
 
-void console_tx_flush(uint32_t timeout_ms) noexcept
+void consoleTxFlush(uint32_t timeoutMs) noexcept
 {
     const uint32_t start = HAL_GetTick();
-    while (__HAL_UART_GET_FLAG(&g_uart, UART_FLAG_TC) == RESET) {
-        if ((HAL_GetTick() - start) >= timeout_ms) {
+    while (__HAL_UART_GET_FLAG(&gUart, UART_FLAG_TC) == RESET) {
+        if ((HAL_GetTick() - start) >= timeoutMs) {
             break;
         }
     }
@@ -582,39 +582,39 @@ void console_tx_flush(uint32_t timeout_ms) noexcept
 /* ========================================================================
  * 初始化
  * ======================================================================*/
-Status uart_init(uint32_t baudrate) noexcept
+Status uartInit(uint32_t baudrate) noexcept
 {
     if (baudrate == 0U) {
         return Status::BadParam;
     }
 
-    gpio_setup();
+    gpioSetup();
 
-    g_uart.Instance          = BL_UART_INSTANCE;
-    g_uart.Init.BaudRate     = baudrate;
-    g_uart.Init.WordLength   = UART_WORDLENGTH_8B;
-    g_uart.Init.StopBits     = UART_STOPBITS_1;
-    g_uart.Init.Parity       = UART_PARITY_NONE;
-    g_uart.Init.Mode         = UART_MODE_TX_RX;
-    g_uart.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
-    g_uart.Init.OverSampling = UART_OVERSAMPLING_16;
+    gUart.Instance          = BL_UART_INSTANCE;
+    gUart.Init.BaudRate     = baudrate;
+    gUart.Init.WordLength   = UART_WORDLENGTH_8B;
+    gUart.Init.StopBits     = UART_STOPBITS_1;
+    gUart.Init.Parity       = UART_PARITY_NONE;
+    gUart.Init.Mode         = UART_MODE_TX_RX;
+    gUart.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
+    gUart.Init.OverSampling = UART_OVERSAMPLING_16;
 
-    if (HAL_UART_Init(&g_uart) != HAL_OK) {
+    if (HAL_UART_Init(&gUart) != HAL_OK) {
         return Status::Error;
     }
 
-    uart_flush_rx();
+    uartFlushRx();
     return Status::Ok;
 }
 
 /* ---- 读取：逐字节收，带总超时 ---- */
-Status uart_read(uint8_t* buf, uint32_t len,
-                 uint32_t timeout_ms, uint32_t* out_read) noexcept
+Status uartRead(uint8_t* buf, uint32_t len,
+                 uint32_t timeoutMs, uint32_t* outRead) noexcept
 {
     uint32_t got = 0;
 
-    if (out_read != nullptr) {
-        *out_read = 0;
+    if (outRead != nullptr) {
+        *outRead = 0;
     }
     if (buf == nullptr || len == 0U) {
         return Status::BadParam;
@@ -623,51 +623,51 @@ Status uart_read(uint8_t* buf, uint32_t len,
     const uint32_t start = HAL_GetTick();
 
     while (got < len) {
-        uint32_t slice = timeout_ms;
+        uint32_t slice = timeoutMs;
 
-        if (timeout_ms != 0U) {
+        if (timeoutMs != 0U) {
             const uint32_t elapsed = HAL_GetTick() - start;
-            if (elapsed >= timeout_ms) {
+            if (elapsed >= timeoutMs) {
                 break;                          /* 总超时 */
             }
-            slice = timeout_ms - elapsed;
+            slice = timeoutMs - elapsed;
         } else {
             slice = 1U;                         /* 0 表示只试一次 */
         }
 
         uint8_t ch = 0;
-        if (HAL_UART_Receive(&g_uart, &ch, 1, slice) == HAL_OK) {
+        if (HAL_UART_Receive(&gUart, &ch, 1, slice) == HAL_OK) {
             buf[got++] = ch;
-        } else if (timeout_ms == 0U) {
+        } else if (timeoutMs == 0U) {
             break;
-        } else if ((HAL_GetTick() - start) >= timeout_ms) {
+        } else if ((HAL_GetTick() - start) >= timeoutMs) {
             break;
         }
     }
 
-    if (out_read != nullptr) {
-        *out_read = got;
+    if (outRead != nullptr) {
+        *outRead = got;
     }
     return (got == len) ? Status::Ok : Status::Timeout;
 }
 
 /// 非阻塞探测单字节：直接读 DR 才是真「不等待」
-bool uart_try_getc(uint8_t* ch) noexcept
+bool uartTryGetc(uint8_t* ch) noexcept
 {
     if (ch == nullptr) {
         return false;
     }
-    if (__HAL_UART_GET_FLAG(&g_uart, UART_FLAG_RXNE) == RESET) {
+    if (__HAL_UART_GET_FLAG(&gUart, UART_FLAG_RXNE) == RESET) {
         return false;
     }
-    *ch = static_cast<uint8_t>(g_uart.Instance->DR & 0xFFU);
+    *ch = static_cast<uint8_t>(gUart.Instance->DR & 0xFFU);
     return true;
 }
 
 /* ========================================================================
  * 写入
  * ======================================================================*/
-Status uart_write(const uint8_t* buf, uint32_t len) noexcept
+Status uartWrite(const uint8_t* buf, uint32_t len) noexcept
 {
     if (buf == nullptr || len == 0U) {
         return Status::BadParam;
@@ -675,7 +675,7 @@ Status uart_write(const uint8_t* buf, uint32_t len) noexcept
 
     const uint32_t slice = 1000U + (len / 10U);      /* 按长度给足余量 */
 
-    if (HAL_UART_Transmit(&g_uart, const_cast<uint8_t*>(buf), len, slice) != HAL_OK) {
+    if (HAL_UART_Transmit(&gUart, const_cast<uint8_t*>(buf), len, slice) != HAL_OK) {
         return Status::Timeout;
     }
     return Status::Ok;
@@ -684,17 +684,17 @@ Status uart_write(const uint8_t* buf, uint32_t len) noexcept
 /* ========================================================================
  * 清空接收缓冲
  * ======================================================================*/
-void uart_flush_rx() noexcept
+void uartFlushRx() noexcept
 {
     /* 先清错误标志，否则后续接收会一直被阻塞 */
-    __HAL_UART_CLEAR_OREFLAG(&g_uart);
-    __HAL_UART_CLEAR_FEFLAG(&g_uart);
-    __HAL_UART_CLEAR_NEFLAG(&g_uart);
-    __HAL_UART_CLEAR_PEFLAG(&g_uart);
+    __HAL_UART_CLEAR_OREFLAG(&gUart);
+    __HAL_UART_CLEAR_FEFLAG(&gUart);
+    __HAL_UART_CLEAR_NEFLAG(&gUart);
+    __HAL_UART_CLEAR_PEFLAG(&gUart);
 
     uint32_t guard = 0;
-    while (__HAL_UART_GET_FLAG(&g_uart, UART_FLAG_RXNE) != RESET && guard++ < 4096U) {
-        (void)g_uart.Instance->DR;
+    while (__HAL_UART_GET_FLAG(&gUart, UART_FLAG_RXNE) != RESET && guard++ < 4096U) {
+        (void)gUart.Instance->DR;
     }
 }
 
@@ -713,17 +713,17 @@ void uart_flush_rx() noexcept
  *   - 不设 MSP           → 栈指针还停在 Bootloader 的栈上，一压栈就踩坏数据
  *   - 不清 CONTROL       → 若此前用过 PSP，APP 会在错误的栈上运行
  * ======================================================================*/
-void jump_to_app(uint32_t app_base) noexcept
+void jumpToApp(uint32_t appBase) noexcept
 {
-    stm32f4::console_tx_flush(100U);   /* 等最后几行日志发完再跳 */
+    stm32f4::consoleTxFlush(100U);   /* 等最后几行日志发完再跳 */
 
     /* 取向量表前两字：初始栈顶与复位入口 */
-    const uint32_t initial_sp = *reinterpret_cast<volatile uint32_t*>(app_base);
-    const uint32_t reset_vec  = *reinterpret_cast<volatile uint32_t*>(app_base + 4U);
+    const uint32_t initialSp = *reinterpret_cast<volatile uint32_t*>(appBase);
+    const uint32_t resetVec  = *reinterpret_cast<volatile uint32_t*>(appBase + 4U);
 
     BL_LOG("[jump] sp=0x%08lX entry=0x%08lX\r\n",
-           static_cast<unsigned long>(initial_sp),
-           static_cast<unsigned long>(reset_vec));
+           static_cast<unsigned long>(initialSp),
+           static_cast<unsigned long>(resetVec));
 
     /* 1. 关全局中断 */
     __disable_irq();
@@ -758,11 +758,11 @@ void jump_to_app(uint32_t app_base) noexcept
     }
 
     /* 5. 重定位向量表到 APP，并保证它对后续取指立即生效 */
-    SCB->VTOR = app_base;
+    SCB->VTOR = appBase;
     __DSB();
 
     /* 6. 设置主堆栈指针 */
-    __set_MSP(initial_sp);
+    __set_MSP(initialSp);
 
     /* 7. 回到特权级 + 使用 MSP（若之前用过 PSP） */
     __set_CONTROL(0U);
@@ -772,7 +772,7 @@ void jump_to_app(uint32_t app_base) noexcept
     __enable_irq();
 
     using AppEntry = void (*)(void);
-    auto entry = reinterpret_cast<AppEntry>(reset_vec);
+    auto entry = reinterpret_cast<AppEntry>(resetVec);
     entry();
 
     /* 正常情况下不会执行到这里 */
@@ -782,19 +782,19 @@ void jump_to_app(uint32_t app_base) noexcept
 
 /* ---- 时基 ---- */
 
-uint32_t tick_ms() noexcept
+uint32_t tickMs() noexcept
 {
     return HAL_GetTick();
 }
 
-void delay_ms(uint32_t ms) noexcept
+void delayMs(uint32_t ms) noexcept
 {
     HAL_Delay(ms);
 }
 
 /* ---- 复位原因 ---- */
 
-ResetCause reset_cause() noexcept
+ResetCause resetCause() noexcept
 {
     // 复位标志是累积的，读后即清；SFTRSTF 优先于 POR/PIN：
     // 探针连着时软件复位会连带拉 NRST，PINRSTF 同时置位
