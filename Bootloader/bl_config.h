@@ -1,124 +1,120 @@
 /**
  * @file    bl_config.h
- * @brief   LUMOS-bootloader 编译期配置 —— 移植时唯一需要修改的文件
+ * @brief   编译期配置 —— 移植时改这一个文件
  *
- * 本文件是「库的唯一配置面」。整个 Bootloader/ 目录可以原样拷进任何
- * 芯片的工程，只需要动这一个文件（外加写一份 target/ 适配）。
- *
- * 结构（移植时从上往下看）：
- *   一、目标芯片   —— 选一个现成预置，或照格式自己填
- *   二、Flash 分区 —— 由「一」自动派生，通常不用动
- *   三、启动行为   —— 软件复位唤回、CRC 校验
- *   四、通信参数   —— 波特率、YMODEM 超时
+ * 目录：
+ *   一、目标芯片    选一个预置（或自己填）
+ *   二、Flash 分区  由「一」自动派生，一般不用动
+ *   三、配置区槽位  记录固件状态的方式
+ *   四、启动与通信  波特率、超时、CRC 校验开关
  *   五、调试输出
+ *   六、集成方式
  *
- * 硬约束：BL_BOOT_BASE / BL_APP_BASE / BL_META_BASE 必须正好落在目标芯片
- *         Flash 的扇区（页）起始边界上 —— Flash 只能整扇区擦除，
- *         差一个字节就会把相邻区域一起擦掉。文件末尾有编译期自检。
+ * 硬约束：分区地址必须落在 Flash 扇区（页）的起始边界上 —— Flash 只能整
+ *         扇区擦除，差一个字节就会连相邻区域一起擦掉。文件末尾有编译期自检。
  */
 #ifndef BL_CONFIG_H
 #define BL_CONFIG_H
 
-/* ============================================================================
+/* ==========================================================================
  * 一、目标芯片
  *
- * 三种用法，任选一种：
- *   A. 什么都不用做（推荐）—— 构建系统为 HAL 定义的那个 CMSIS 器件宏
- *      （STM32F401xE / STM32F405xx / …）在这里被复用，自动挑出对应预置。
- *      Keil 里就是 Options → C/C++ → Define 里已有的那一项，无需新增。
- *   B. 显式指定 —— 取消下面某一行的注释，优先于 A。
- *   C. 没有预置的新芯片 —— 保持注释，直接在「手填区」把值填上。
- *
- * 预置里只有数字（容量、时钟树），没有任何代码；
- * 换芯片时它是和 target/ 适配配套的两件事，别只改一半。
+ * 两种用法：
+ *   A. 什么都不做（推荐）—— 构建系统为 HAL 定义的那个 CMSIS 器件宏
+ *      （STM32F401xE / STM32F405xx / STM32F407xx）在这里被自动识别。
+ *      Keil 里就是 Options → C/C++ → Define 里已有那一项，不用新增。
+ *   B. 新芯片 —— 在下面的「手填区」把数字填上即可（照现有预置的格式）。
  * ==========================================================================*/
 
-/* ---- A/B. 预置（手动指定优先，取消注释即生效） ---- */
-// #include "presets/stm32f401xe.h"
-// #include "presets/stm32f405xx.h"
-// #include "presets/stm32f407xx.h"
-// #include "presets/gd32f303re.h"
+/* ---- 预置：STM32F401xD/E（512KB Flash / 96KB SRAM / 最高 84MHz） ---- */
+#if defined(STM32F401xE) || defined(STM32F401xD) || defined(BL_CHIP_STM32F401XE)
+    #define BL_CHIP_NAME            "STM32F401xE"
+    #define BL_FLASH_BASE           0x08000000UL
+    #define BL_FLASH_SIZE           (512UL * 1024UL)
+    #define BL_SRAM_BASE            0x20000000UL
+    #define BL_SRAM_END             0x20018000UL      /* 96KB，不含 */
+    #define BL_META_SIZE            (128UL * 1024UL)  /* 最后一个扇区 S7 */
 
-/* ---- 自动跟随构建系统的器件宏（已手动指定或没有匹配项时跳过） ---- */
-#if !defined(BL_CHIP_NAME)
-    #if defined(STM32F401xE)
-        #include "presets/stm32f401xe.h"
-    #elif defined(STM32F405xx)
-        #include "presets/stm32f405xx.h"
-    #elif defined(STM32F407xx)
-        #include "presets/stm32f407xx.h"
-    #elif defined(GD32F30X)
-        #include "presets/gd32f303re.h"
+    /* 25MHz --(PLLM)--> 1MHz --(PLLN)--> 336MHz --(PLLP)--> 84MHz */
+    #define BL_HSE_HZ               25000000UL
+    #define BL_SYSCLK_HZ            84000000UL
+    #define BL_PLL_M                25UL
+    #define BL_PLL_N                336UL
+    #define BL_PLL_P                4UL               /* 只允许 2/4/6/8 */
+    #define BL_PLL_Q                7UL
+    #define BL_AHB_DIV              1UL
+    #define BL_APB1_DIV             2UL               /* PCLK1 = 42MHz */
+    #define BL_APB2_DIV             1UL               /* PCLK2 = 84MHz */
+    #define BL_FLASH_LATENCY        2UL
+
+/* ---- 预置：STM32F405xx / STM32F407xx（1MB Flash / 128KB SRAM / 168MHz） ----
+ * 注意：这两颗默认按 8MHz 晶振算。若你的板子是 25MHz（某些 F407 板），
+ *       把 BL_HSE_HZ / BL_PLL_M 改成 25 / 25，其余不变。 */
+#elif defined(STM32F405xx) || defined(STM32F407xx) || defined(BL_CHIP_STM32F405XX) || defined(BL_CHIP_STM32F407XX)
+    #if defined(STM32F405xx) || defined(BL_CHIP_STM32F405XX)
+        #define BL_CHIP_NAME        "STM32F405xx"
+    #else
+        #define BL_CHIP_NAME        "STM32F407xx"
     #endif
+    #define BL_FLASH_BASE           0x08000000UL
+    #define BL_FLASH_SIZE           (1024UL * 1024UL)
+    #define BL_SRAM_BASE            0x20000000UL
+    #define BL_SRAM_END             0x20020000UL      /* 128KB，不含 */
+    #define BL_META_SIZE            (128UL * 1024UL)  /* 最后一个扇区 */
+
+    /* 8MHz --(PLLM)--> 1MHz --(PLLN)--> 336MHz --(PLLP)--> 168MHz */
+    #define BL_HSE_HZ               8000000UL
+    #define BL_SYSCLK_HZ            168000000UL
+    #define BL_PLL_M                8UL
+    #define BL_PLL_N                336UL
+    #define BL_PLL_P                2UL
+    #define BL_PLL_Q                7UL
+    #define BL_AHB_DIV              1UL
+    #define BL_APB1_DIV             4UL               /* PCLK1 = 42MHz */
+    #define BL_APB2_DIV             2UL               /* PCLK2 = 84MHz */
+    #define BL_FLASH_LATENCY        5UL
+
+/* ---- 手填区：新芯片在这里填（填漏会编译报错，不会带错值上板） ---- */
+#else
+    /* #define BL_CHIP_NAME         "你的芯片名" */
+    /* #define BL_FLASH_BASE        0x08000000UL */
+    /* #define BL_FLASH_SIZE        (512UL * 1024UL) */
+    /* #define BL_SRAM_BASE         0x20000000UL */
+    /* #define BL_SRAM_END          0x20010000UL */
+    /* #define BL_META_SIZE         (16UL * 1024UL)   最后一个扇区的大小 */
+    /* 时钟参数只有用 bl_port_stm32f4.cpp 那份移植实现时才需要 */
 #endif
 
-/* ---------------------------------------------------------------------------
- * 手填区（用预置时无需理会；预置没覆盖到的项可在这里补）
- * -------------------------------------------------------------------------*/
-
-/** 芯片名，只用于启动时打印标识 */
-#ifndef BL_CHIP_NAME
-#error "未配置目标芯片：请取消 config/presets/ 中某一行的注释，或在此定义 BL_CHIP_NAME"
-#endif
-
-/** Flash 起始地址与容量 —— 分区地址全部由它派生 */
-#ifndef BL_FLASH_BASE
-#define BL_FLASH_BASE               0x08000000UL
-#endif
-#ifndef BL_FLASH_SIZE
-#error "未配置 BL_FLASH_SIZE：参考数据手册的 Flash 容量（如 512KB 写 (512UL*1024UL)）"
-#endif
-
-/**
- * 片内 SRAM 范围（半开区间 [BASE, END)）
- *
- * 用途：启动时校验 APP 向量表的「初始栈顶」是否落在合法 RAM 内。
- * 只填主 SRAM 连续段；CCM/TCM 之类不参与。
- */
-#ifndef BL_SRAM_BASE
-#define BL_SRAM_BASE                0x20000000UL
-#endif
-#ifndef BL_SRAM_END
-#error "未配置 BL_SRAM_END：填 SRAM 结束地址（不含），例如 128KB@0x20000000 写 0x20020000"
-#endif
-
-/* ============================================================================
- * 二、Flash 分区
- *
- * 三块：Bootloader（常驻）/ APP（被升级）/ 配置区（记录固件状态）。
- * 这里只做地址派生 —— 改容量就能自动得到正确布局：
+/* ==========================================================================
+ * 二、Flash 分区（由上面自动派生）
  *
  *   F401 512KB : BOOT 16KB @0x08000000 | APP 368KB @0x08004000 | META 128KB @0x08060000
- *   F405 1MB   : BOOT 16KB @0x08000000 | APP 880KB @0x08004000 | META 128KB @0x080E0000
+ *   F405/F407  : BOOT 16KB @0x08000000 | APP 880KB @0x08004000 | META 128KB @0x080E0000
  *
- * 为什么配置区放在末尾而不是开头：F4 的扇区是「小而少 + 大而多」，
- * 末尾一定是整块大扇区；而开头几个小扇区拼在一起也凑不出一个干净的区域，
- * APP 会被割裂成两段。
+ * 配置区为什么放末尾：F4 的扇区是「开头小而密、末尾大而整」，末尾一定是一块
+ * 完整大扇区；放开头则几个小扇区拼不出干净区域，还会把 APP 区割裂成两段。
  * ==========================================================================*/
 
-/** Bootloader 区大小；16KB 对串口 IAP 足够，且只占一个扇区（S0） */
+/** Bootloader 区大小。16KB 对串口 IAP 足够，且正好占一个扇区 */
 #ifndef BL_BOOT_SIZE
-#define BL_BOOT_SIZE                (16UL * 1024UL)
+#define BL_BOOT_SIZE            (16UL * 1024UL)
 #endif
 
-/**
- * 配置区大小 —— 必须等于目标 Flash「最后一个扇区」的大小
- * 这样 BL_META_BASE 才自然落在扇区起点上，且 APP 区保持连续。
- */
+/** 配置区大小 —— 必须等于目标 Flash「最后一个扇区」的大小 */
 #ifndef BL_META_SIZE
-#define BL_META_SIZE                (128UL * 1024UL)
+#error "未配置 BL_META_SIZE：请在第一节选用某个预置，或填上最后一个扇区的大小"
 #endif
 
-#define BL_BOOT_BASE                (BL_FLASH_BASE)
-#define BL_APP_BASE                 (BL_BOOT_BASE + BL_BOOT_SIZE)
-#define BL_META_BASE                (BL_FLASH_BASE + BL_FLASH_SIZE - BL_META_SIZE)
-#define BL_APP_SIZE                 (BL_META_BASE - BL_APP_BASE)
-#define BL_FLASH_END                (BL_FLASH_BASE + BL_FLASH_SIZE)
+#define BL_BOOT_BASE            (BL_FLASH_BASE)
+#define BL_APP_BASE             (BL_BOOT_BASE + BL_BOOT_SIZE)
+#define BL_META_BASE            (BL_FLASH_BASE + BL_FLASH_SIZE - BL_META_SIZE)
+#define BL_APP_SIZE             (BL_META_BASE - BL_APP_BASE)
+#define BL_FLASH_END            (BL_FLASH_BASE + BL_FLASH_SIZE)
 
-/** APP 向量表基址：APP 侧工程把它写进 SCB->VTOR（或 VECT_TAB_OFFSET） */
-#define BL_APP_VTOR                 (BL_APP_BASE)
+/** APP 向量表基址：APP 工程要把它写进 SCB->VTOR（或 Keil 的 VECT_TAB_OFFSET） */
+#define BL_APP_VTOR             (BL_APP_BASE)
 
-/* ---- 编译期自检：分区重叠 / 越界 / 未对齐 ---- */
+/* ---- 编译期自检：分区重叠 / 越界 / 未落在扇区边界 ---- */
 #if (BL_BOOT_BASE + BL_BOOT_SIZE) > BL_APP_BASE
 #error "分区重叠：Bootloader 区与 APP 区"
 #endif
@@ -135,122 +131,101 @@
 #error "APP 区不足 64KB：请减小 BL_BOOT_SIZE / BL_META_SIZE，或确认 BL_FLASH_SIZE"
 #endif
 
-/* ============================================================================
- * 二·补充、配置区槽位
+/* ==========================================================================
+ * 三、配置区槽位
  *
- * 配置区采用「日志式槽位轮转」：每次状态变更顺序追加一个新槽而不擦除，
- * 读的时候取序号最大的有效槽，写满整片后才擦一次。
+ * 「日志式追加」：每次状态变更顺序写一个新槽而不擦除，读的时候取序号最大
+ * 的有效槽，写满整片后才擦一次。
  *
- * 为什么不用原地擦写：一次状态写入只有几十字节、耗时几十微秒；
- * 而擦一个 128KB 扇区要 1 秒左右并消耗一次寿命 —— 每次上电记录启动
- * 计数都这么干，既卡顿又短命。
+ * 为什么不原地擦写：一次状态写入只有几十字节、几十微秒；而擦一个 128KB
+ * 扇区要 1 秒左右并消耗一次寿命。
  * ==========================================================================*/
 
 /** 单个槽位字节数；必须是 Flash 编程单位的整数倍（F4 是 4 字节） */
 #ifndef BL_META_SLOT_SIZE
-#define BL_META_SLOT_SIZE           64UL
+#define BL_META_SLOT_SIZE       64UL
 #endif
 
-/** 槽位总数。128KB / 64B = 2048 个，够用很久 */
-#define BL_META_SLOT_COUNT          (BL_META_SIZE / BL_META_SLOT_SIZE)
+#define BL_META_SLOT_COUNT      (BL_META_SIZE / BL_META_SLOT_SIZE)
 
-/* ============================================================================
- * 三、启动行为
+/* ==========================================================================
+ * 四、启动与通信
  * ==========================================================================*/
 
 /**
- * 「进入 Bootloader」的软件请求通道：APP 检测到升级指令后软复位（不写标志），
- * Bootloader 靠复位原因识别「软件复位 + Valid 态」进入限时升级窗口。
- *
- *   - 正常上电 / 硬件复位 → 直接跳 APP
- *   - 软件复位 + Valid 态 → 进限时窗口（时长 = BL_YMODEM_HANDSHAKE_MS）
- *
- * APP 侧只需软复位（见 bl_app.h 的 bl_request_update）。
+ * 启动时是否额外做整镜像 CRC32 校验。
+ *   1 = 做（推荐）：挡住 Flash 位翻转 / 擦写不完整
+ *   0 = 只做向量表检查，上电更快
  */
-
-/** 启动时是否做整镜像 CRC32 校验（更稳，代价是每次上电略慢） */
 #ifndef BL_BOOT_VERIFY_CRC32
-#define BL_BOOT_VERIFY_CRC32        1
+#define BL_BOOT_VERIFY_CRC32    1
 #endif
-
-/* ============================================================================
- * 四、通信参数
- * ==========================================================================*/
 
 /** IAP 阶段串口波特率 */
 #ifndef BL_UART_BAUDRATE
-#define BL_UART_BAUDRATE            115200UL
+#define BL_UART_BAUDRATE        115200UL
 #endif
 
-/** YMODEM 单帧数据上限（1K 模式为 1024，兼容工具会自动选） */
+/** YMODEM 单帧数据上限（1024 = 1K 模式；上位机不支持时会自动退回 128） */
 #ifndef BL_YMODEM_BLOCK_SIZE
-#define BL_YMODEM_BLOCK_SIZE        1024U
+#define BL_YMODEM_BLOCK_SIZE    1024U
 #endif
 
-/** 单个数据帧接收超时（毫秒） */
+/** 单个数据帧的接收超时（毫秒） */
 #ifndef BL_YMODEM_PACKET_TIMEOUT_MS
 #define BL_YMODEM_PACKET_TIMEOUT_MS 3000UL
 #endif
 
-/** 等 'C' 握手的最长时间（毫秒）；超时则放弃升级并尝试启动 APP */
+/**
+ * 握手总超时（毫秒）—— 也是「APP 唤回窗口」的长度。
+ *
+ * APP 软复位唤回 Bootloader 后，Bootloader 只给上位机这么长时间来发第一个
+ * YMODEM 包；超时就跳回 APP 继续跑。置 0 = 无限等（传统行为，不推荐）。
+ */
 #ifndef BL_YMODEM_HANDSHAKE_MS
-#define BL_YMODEM_HANDSHAKE_MS      15000UL
+#define BL_YMODEM_HANDSHAKE_MS  15000UL
 #endif
 
-/** 重传请求总次数上限，超过则中止本次升级 */
+/** 传输途中允许的连续超时次数，超过则中止本次升级 */
 #ifndef BL_YMODEM_MAX_RETRY
-#define BL_YMODEM_MAX_RETRY         10U
+#define BL_YMODEM_MAX_RETRY     10U
 #endif
 
 /** 单帧内允许的连续 NAK 次数 */
 #ifndef BL_YMODEM_MAX_NAK
-#define BL_YMODEM_MAX_NAK           5U
+#define BL_YMODEM_MAX_NAK       5U
 #endif
 
-/* ============================================================================
+/* ==========================================================================
  * 五、调试输出
+ *
+ * 这是 ROM 占用最大的开关：链接标准 vsnprintf 会连带格式化与浮点支持吃掉
+ * 约 6.5KB，而 Bootloader 只有 16KB 可用。所以不用 stdio，改用 bl.cpp 里的
+ * 轻量格式化（约 2KB）。可用 -DBL_DEBUG_LOG=0 量「发布版」体积。
+ * 用 BL_LOG 的文件只需 include "bl.h"（声明在那里）。
  * ==========================================================================*/
-
-/**
- * 是否通过串口输出调试信息
- *
- * 这是 ROM 占用最大的变量：实测链接标准 vsnprintf 会连带格式化与浮点
- * 支持代码一起吃掉约 6.5KB，而 Bootloader 只有 16KB 可用。
- * 因此不走 stdio，改用 core/bl_log 里的轻量格式化（约 2KB）。
- *
- * 允许用 -DBL_DEBUG_LOG=0 覆盖，便于量「发布版」体积。
- */
 #ifndef BL_DEBUG_LOG
-#define BL_DEBUG_LOG                1
+#define BL_DEBUG_LOG            1
 #endif
 
-/**
- * 调试输出宏
- *
- * 走 bl::log::printf，不依赖 stdio。
- * 使用本宏的 .cpp 需先 #include "core/bl_log.hpp"。
- */
 #if BL_DEBUG_LOG
-    #define BL_LOG(...)             do { ::bl::log::printf(__VA_ARGS__); } while (0)
+    #define BL_LOG(...)         do { ::bl::log::printf(__VA_ARGS__); } while (0)
 #else
-    #define BL_LOG(...)             do { } while (0)
+    #define BL_LOG(...)         do { } while (0)
 #endif
 
-/* ============================================================================
+/* ==========================================================================
  * 六、集成方式
  * ==========================================================================*/
 
 /**
  * 库是否自带 main()
- *
- *   1 = 自带（默认）。适合「Bootloader 是一份独立固件」的常规做法：
- *       Bootloader/ 直接就是程序，宿主工程里自带的 main.c 要排除掉。
- *   0 = 不自带。适合把库接进一个已经存在的工程：在你自己的 main() 里
- *       调用 bl::bl_entry() 即可，库不会和你的入口打架。
- *       bl::bl_entry() 内部做幂等初始化，宿主先初始化过也不会冲突。
+ *   1 = 自带（默认）。Bootloader 是一份独立固件时用这个；
+ *       宿主工程里自带的 main.c 记得移出编译。
+ *   0 = 不自带。把库接进已有工程时用，在你自己的 main() 里调 bl_run()。
  */
 #ifndef BL_PROVIDE_MAIN
-#define BL_PROVIDE_MAIN             1
+#define BL_PROVIDE_MAIN         1
 #endif
 
 #endif /* BL_CONFIG_H */
