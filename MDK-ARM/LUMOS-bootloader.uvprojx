@@ -337,7 +337,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls>-Oz -fno-exceptions</MiscControls>
-              <Define>USE_HAL_DRIVER,STM32F401xE,HSE_VALUE=25000000</Define>
+              <Define>USE_HAL_DRIVER,STM32F401xE</Define>
               <Undefine></Undefine>
               <IncludePath>..\Bootloader;../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
@@ -481,6 +481,11 @@
               <FileName>system_stm32f4xx.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/system_stm32f4xx.c</FilePath>
+            </File>
+            <File>
+              <FileName>bl_clock.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/bl_clock.c</FilePath>
             </File>
           </Files>
         </Group>
