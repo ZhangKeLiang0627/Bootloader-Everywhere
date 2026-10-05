@@ -4,7 +4,7 @@
 
 ```
 Bootloader 启动 → 等 YMODEM → 接收固件 → 擦除/写入 APP 区 → CRC 校验
-    → 状态置 TESTING → 复位 → 重新决策 → 跳转到 APP → APP 正常运行
+    → 状态置 VALID → 直接跳转到 APP → APP 正常运行
 ```
 
 它不是"为了测试而拼凑的假件"，而是一个**能独立运行的真实 APP**：
@@ -21,7 +21,11 @@ TestApp/
 ├── link_app.sct         链接脚本：整个镜像从 0x08004000 开始，上限 368KB
 ├── build_app.py         构建脚本（armclang + armasm + armlink）
 └── tools/
-    └── ymodem_send.py   YMODEM-1K 上位机（也是将来网页版的协议参照）
+    ├── ymodem_send.py   YMODEM-1K 上位机（也是网页版的协议参照）
+    ├── board_test.py    板端测试驱动（烧写 / 进 IAP / 升级 / 观察）
+    ├── test_auto.py     自动化暴力测试编排（T1-T5）
+    ├── power_test.py    断电暴力测试引导（需人工配合拔电）
+    └── verify_window.py 软件复位唤回 + 15s 窗口链路验证
 ```
 
 ## 构建
@@ -60,9 +64,9 @@ python TestApp/tools/ymodem_send.py COM3 build/app_test.bin
 ...
 ```
 
-## 作为参考实现：写一个能跑在 Bootloader 后面的 APP，必须做对这四件事
+## 作为参考实现：写一个能跑在 Bootloader 后面的 APP，必须做对这三件事
 
-这四条都是实测踩出来的，任何一条漏掉，现象都是"APP 完全不输出"。
+这三条都是实测踩出来的，任何一条漏掉，现象都是"APP 完全不输出"。
 
 ### 1. 重定位向量表
 
@@ -101,29 +105,6 @@ SCB_ICSR = (1UL << 25);   /* PENDSTCLR */
 Bootloader 侧已经修掉了根因（见 `bl_port_system_stm32f4.cpp` 的说明），
 这里再清一遍是廉价的双保险。
 
-### 4. 管好看门狗
-
-IWDG 一旦启动就无法停止（只能靠复位），**系统复位也不会复位它**
-（它在 VDD 域）。Bootloader 启用它之后，APP 必须持续喂狗：
-
-```c
-IWDG->KR = 0xAAAA;        /* 喂狗 */
-```
-
-如果要自己配置 IWDG，**顺序必须是**（与 ST 的 `HAL_IWDG_Init` 一致）：
-
-```c
-IWDG->KR = 0xCCCC;        /* 1. 先启动 —— 硬件会顺带打开 LSI */
-/* 2. 等 SR 的 PVU/RVU 落（要有超时！） */
-IWDG->KR = 0x5555;        /* 3. 允许改写 PR/RLR */
-IWDG->PR = ...;  IWDG->RLR = ...;
-/* 4. 等参数生效（要有超时！） */
-IWDG->KR = 0xAAAA;        /* 5. 喂一次 */
-```
-
-反过来（先 0x5555 + 参数、再 0xCCCC）会死锁：LSI 还没起振时 IWDG
-没有时钟，`SR` 的 `PVU/RVU` 会一直保持 1，任何"等它清零"的循环都出不来。
-
 ## 启动阶段标记（诊断技巧）
 
 `app_main.c` 里在 RAM 高位（`0x20010000` 起）写了一系列阶段标记：
@@ -137,20 +118,23 @@ IWDG->KR = 0xAAAA;        /* 5. 喂一次 */
 | 4 | 实际 PCLK2（kHz） |
 | 5 | 进入 main |
 | 6 | 串口配置完成 |
-| 7 | IWDG 配置完成 |
-| 8 | 即将输出 banner |
+| 7 | 即将输出 banner |
 
 串口完全不出声时，用调试器读这几个字就能立刻知道 APP 执行到了哪一步，
 比反复猜要快得多：
 
 ```python
 # 用 pyocd
-for i in range(9):
+for i in range(8):
     print(hex(target.read32(0x20010000 + 4*i)))
 ```
 
-## 关于 confirm（尚未实现）
+## 关于「进入 Bootloader」
 
-当前测试 APP **不调用** Bootloader 的确认接口，所以固件会一直停在
-`TESTING` 状态，启动 3 次后自动回滚（这是防变砖设计的预期行为）。
-若要让它稳定驻留，需要通过双方约定的接口把自己标记为 `VALID`。
+本 APP 运行中会在主循环轮询串口，逐字节匹配关键字
+`#Bootloader-Everywhere`；匹配完整就做一次软件复位（`NVIC_SystemReset`）。
+Bootloader 靠复位原因识别「软件复位 + 固件 Valid 态」，进入 15s 限时升级
+窗口 —— 这就是网页端「点开始升级自动唤回」的板端对应实现。
+
+真实 APP 接入只需 `#include "bl_app.h"` 并自己匹配关键字后调
+`bl_request_update()`（只依赖 CMSIS）。

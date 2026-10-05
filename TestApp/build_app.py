@@ -66,8 +66,8 @@ def main():
                     help="输出的 .bin 路径。默认 app_test.bin，"
                          "故障固件为 app_fail<N>.bin")
     ap.add_argument("--fail", type=int, default=0, choices=(0, 1, 2),
-                    help="故障注入（验证 Bootloader 回滚用）："
-                         "1 = 故意不喂狗；2 = 启动即 HardFault")
+                    help="故障注入（构造坏固件用）："
+                         "1 = 挂死；2 = 启动即 HardFault")
     ap.add_argument("--map", action="store_true", help="打印符号表摘要")
     args = ap.parse_args()
 
@@ -89,7 +89,7 @@ def main():
     if args.fail:
         print("⚠ 故障注入模式 APP_FAIL_MODE=%d （%s）"
               % (args.fail,
-                 "不喂狗，等看门狗" if args.fail == 1 else "启动即 HardFault"))
+                 "挂死" if args.fail == 1 else "启动即 HardFault"))
     print("=" * 66)
 
     # 1) 汇编启动文件

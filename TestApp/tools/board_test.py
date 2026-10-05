@@ -3,14 +3,14 @@
 板端测试驱动 —— LUMOS-bootloader 的自动化测试基础设施
 
 把「烧写 → 进 IAP → 升级 → 观察」这一串动作封成命令，避免每次测试都
-临时拼脚本。后续的暴力测试计划（docs/TEST_PLAN.md）就用它来跑。
+临时拼脚本。
 
 用法：
     python board_test.py flash                       # 烧 Bootloader 的 hex
-    python board_test.py backdoor                    # 复位并在窗口内发 0x7F 进 IAP
+    python board_test.py iap                         # 软件复位进入限时升级窗口
     python board_test.py upgrade build/app_test.bin  # 传固件（自动等 'C'）
     python board_test.py observe 20                  # 单纯观察串口 20 秒
-    python board_test.py run --app build/app_fail1.bin
+    python board_test.py run --app build/app_test.bin
                                                      # 烧 Bootloader + 进 IAP + 升级 + 观察
 
 串口与探针参数可用 --port / --target 覆盖。
@@ -43,7 +43,9 @@ ROOT = os.path.dirname(os.path.dirname(HERE))          # .../LUMOS-bootloader
 DEFAULT_HEX = os.path.join(ROOT, "MDK-ARM", "LUMOS-bootloader",
                            "LUMOS-bootloader.hex")
 DEFAULT_BAUD = 115200
-BACKDOOR_CHAR = 0x7F
+
+# SCB->AIRCR：VECTKEY | SYSRESETREQ
+AIRCR_SYSRESETREQ = 0x05FA0004
 
 
 # ---------------------------------------------------------------- 基础设施
@@ -66,41 +68,63 @@ def flash_bootloader(target, hex_path):
         s.close()
 
 
-def enter_iap(target, port, window=1.0):
-    """复位，并在 Backdoor 时间窗内持续发送触发字符。
+def software_reset(target, retries=3):
+    """用探针触发一次软件复位（SYSRESETREQ）。
 
-    必须「持续」发而不是只发一次：目标的 uart_init 里会 flush_rx，
-    早于它的字节会被丢掉。
+    Bootloader 靠复位原因识别唤回：软件复位 + 固件 Valid 态 → 进入限时
+    升级窗口。这是网页端「点开始升级自动唤回」在测试侧的等价手段。
+
+    pyocd 连接偶发失败（线缆抖动），重试几次以免测试被硬件噪声打断。
     """
-    s = open_probe(target)
+    last = None
+    for _ in range(retries):
+        s = open_probe(target)
+        try:
+            s.open()
+            t = s.target
+            t.halt()
+            t.write32(0xE000ED0C, AIRCR_SYSRESETREQ)
+            return True
+        except Exception as e:            # noqa: BLE001
+            last = e
+        finally:
+            try:
+                s.close()
+            except Exception:             # noqa: BLE001
+                pass
+        time.sleep(0.4)
+    print("  ★ software_reset 失败:", last)
+    return False
+
+
+def enter_iap(target, port, wait=8.0):
+    """软件复位进入限时升级窗口，并确认已进 IAP。"""
     ser = serial.Serial(port, DEFAULT_BAUD, timeout=0.05)
     try:
-        s.open()
-        t = s.target
-        t.reset_and_halt()
         ser.reset_input_buffer()
-        t.resume()
-        deadline = time.time() + window
-        n = 0
-        while time.time() < deadline:
-            ser.write(bytes([BACKDOOR_CHAR]))
-            n += 1
-            time.sleep(0.008)
-        time.sleep(1.2)
+        software_reset(target)
         buf = bytearray()
-        while ser.in_waiting:
-            buf += ser.read(ser.in_waiting)
+        t0 = time.time()
+        while time.time() - t0 < wait:
+            n = ser.in_waiting
+            if n:
+                buf += ser.read(n)
+            else:
+                b = ser.read(1)
+                if b:
+                    buf += b
+            if b'waiting for YMODEM' in buf:
+                break
+            time.sleep(0.01)
         txt = buf.decode('utf-8', 'replace')
-        ok = 'backdoor triggered' in txt or 'waiting for YMODEM' in txt
-        print("  发了 %d 个 0x%02X；%s" % (n, BACKDOOR_CHAR,
-              "✔ 已进入 IAP" if ok else "★ 未确认进入 IAP"))
+        ok = ('waiting for YMODEM' in txt) or ('IAP' in txt)
+        print("  %s" % ("✔ 已进入 IAP" if ok else "★ 未确认进入 IAP"))
         for line in txt.splitlines():
             if line.strip() and not line.strip().startswith('C'):
                 print("    |", line.replace('\r', ''))
         return ok
     finally:
         ser.close()
-        s.close()
 
 
 def upgrade(port, app_path, timeout=120.0):
@@ -155,7 +179,7 @@ def cmd_flash(args):
     return 0
 
 
-def cmd_backdoor(args):
+def cmd_iap(args):
     return 0 if enter_iap(args.target, args.port) else 1
 
 
@@ -200,10 +224,8 @@ def cmd_run(args):
     print("\n--- 摘要 ---")
     print("  bootloader 启动     : %d 次" % txt.count('LUMOS-bootloader'))
     print("  APP 启动            : %d 次" % txt.count('LUMOS APP'))
-    print("  first boot after    : %d 次" % txt.count('first boot after upgrade'))
-    print("  clean boot          : %d 次" % txt.count('clean boot'))
-    print("  watchdog 复位       : %d 次" % txt.count('watchdog reset'))
-    print("  rollback            : %d 次" % txt.count('rollback'))
+    print("  进入窗口 (IAP_TIMED): %d 次" % txt.count('IAP_TIMED'))
+    print("  窗口超时跳回 APP    : %d 次" % txt.count('upgrade window timeout'))
     causes = re.findall(r'reset cause = (\d)', txt)
     if causes:
         names = {'0': 'unk', '1': 'por', '2': 'pin', '3': 'sft', '4': 'wdg',
@@ -244,8 +266,8 @@ def main():
     p.add_argument("--hex", default=DEFAULT_HEX)
     p.set_defaults(func=cmd_flash)
 
-    p = sub.add_parser("backdoor", help="进 IAP")
-    p.set_defaults(func=cmd_backdoor)
+    p = sub.add_parser("iap", help="软件复位进限时升级窗口")
+    p.set_defaults(func=cmd_iap)
 
     p = sub.add_parser("upgrade", help="传固件")
     p.add_argument("app")

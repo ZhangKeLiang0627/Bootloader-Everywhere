@@ -24,14 +24,16 @@
 #define APP_BASE            0x08004000UL
 
 /* ========================================================================
- * 故障注入开关（仅用于验证 Bootloader 的回滚机制）
+ * 故障注入开关
  *
  *   0 = 正常
- *   1 = 故意不喂狗：IWDG 超时后把 CPU 拉回 Bootloader。用来验证
- *       「看门狗自确认」判据，以及连续失败后的自动回滚
- *   2 = 一启动就触发 HardFault：验证崩溃路径
+ *   1 = 挂死：主循环不响应任何输入，用来模拟「跑得起来但没反应」的坏固件
+ *   2 = 一启动就触发 HardFault
  *
- * 用 build_app.py 的 --fail N 编译出故障固件（app_fail.bin）。
+ * 用 build_app.py 的 --fail N 编译出故障固件（app_failN.bin）。
+ * 注意：本工程已移除看门狗与自确认回滚（见 Bootloader/bl_config.h），
+ * 故障固件不会再被自动回滚 —— 这正是新设计预期的行为，用于验证
+ * 「坏固件能下载进去、能跳转，只是跑不通，靠人重新上传」。
  * ======================================================================*/
 #ifndef APP_FAIL_MODE
 #define APP_FAIL_MODE       0
@@ -47,7 +49,6 @@
 #define MK_CLOCK            0xA4U
 #define MK_MAIN             0xA5U
 #define MK_UART             0xA6U
-#define MK_IWDG             0xA7U
 #define MK_BANNER           0xA8U
 
 /* RCC */
@@ -85,13 +86,6 @@
 #define SYST_RVR            REG32(0xE000E014UL)
 #define SYST_CVR            REG32(0xE000E018UL)
 
-/* IWDG（APP 自己管理看门狗，不依赖 Bootloader 是否启动过） */
-#define IWDG_BASE           0x40003000UL
-#define IWDG_KR             REG32(IWDG_BASE + 0x00U)
-#define IWDG_PR             REG32(IWDG_BASE + 0x04U)
-#define IWDG_RLR            REG32(IWDG_BASE + 0x08U)
-#define IWDG_SR             REG32(IWDG_BASE + 0x0CU)
-
 /* 时钟参数：HSE 25MHz -> PLL -> 84MHz（与 Bootloader 保持一致） */
 #define HSE_VALUE           25000000UL
 #define PLL_M               25UL
@@ -122,48 +116,6 @@ static void fpu_enable(void)
     __asm volatile ("dsb");
     __asm volatile ("isb");
 }
-
-/**
- * @brief 配置并启动独立看门狗
- *
- * IWDG 一旦启动就无法停止（只能靠复位），所以 APP 必须持续喂狗。
- * 这里不去猜测 Bootloader 是否已经开过它 —— 无论开没开，
- * 按同样的参数重新配一遍都是安全的（写 KR=0xCCCC 对已启动的 IWDG 无副作用）。
- *
- * 超时按 6 秒设置，与 Bootloader 保持一致：
- *   LSI ≈ 32kHz，64 分频 → 500Hz，重载 3000 → 约 6 秒
- */
-static void iwdg_init(void)
-{
-    /* 顺序很关键，必须与 ST 的 HAL_IWDG_Init 一致：
-     *   1) 先写 0xCCCC **启动** IWDG —— 硬件会顺带把 LSI 振荡器打开
-     *   2) 等 PVU/RVU 落（LSI 已经在跑，这两位才有可能被硬件清掉）
-     *   3) 写 0x5555 允许改写 PR/RLR，再写参数
-     *   4) 喂一次狗
-     *
-     * 反例（踩过的坑）：先写 0x5555 + PR/RLR 而不先启动 IWDG，
-     *   LSI 没有时钟去驱动 IWDG 逻辑，SR 的 PVU/RVU 会**一直保持 1**，
-     *   任何“等它清零”的循环都会死锁 —— 现象是 APP 刚进去就再也不出声。
-     */
-    IWDG_KR = 0xCCCCU;                              /* 启动（LSI 随之使能） */
-
-    for (uint32_t i = 0; i < 0x100000U; ++i) {      /* 等 LSI 起振、SR 清零 */
-        if (IWDG_SR == 0U) { break; }
-    }
-
-    IWDG_KR  = 0x5555U;                             /* 允许改写 PR / RLR */
-    IWDG_PR  = 4U;                                  /* 64 分频 */
-    IWDG_RLR = 3000U;                               /* 3000 → 约 6 秒 */
-
-    for (uint32_t i = 0; i < 0x100000U; ++i) {      /* 等参数写入生效 */
-        if ((IWDG_SR & 0x3U) == 0U) { break; }
-    }
-
-    IWDG_KR = 0xAAAAU;                              /* 喂一次 */
-}
-
-/* 喂狗 */
-#define iwdg_feed()         do { IWDG_KR = 0xAAAAU; } while (0)
 
 /* ========================================================================
  * 时钟
@@ -432,10 +384,8 @@ int main(void)
     APP_MARK(5, MK_MAIN);
     uart_init();
     APP_MARK(6, MK_UART);
-    iwdg_init();
-    APP_MARK(7, MK_IWDG);
 
-    APP_MARK(8, MK_BANNER);
+    APP_MARK(7, MK_BANNER);
     uart_puts("\r\n");
     uart_puts("===== LUMOS APP (test) =====\r\n");
     uart_puts("[app] running at  : ");
@@ -463,18 +413,13 @@ int main(void)
     uart_puts("----------------------------\r\n");
 
 #if APP_FAIL_MODE == 1
-    /* 【故障注入 1】故意不喂狗。
-     * 主循环里没有 iwdg_feed()，所以 IWDG（6 秒）超时后会把 CPU 复位，
-     * Bootloader 由此看到 IWDGRSTF，判定这个固件跑不起来并逐步累加计数。
-     * 用于验证「看门狗自确认」判据与自动回滚。 */
-    uart_puts("[app] FAIL-MODE=1: watchdog will NOT be fed\r\n");
+    /* 【故障注入 1】挂死：不再响应任何输入，也不会自己复位。
+     * 用于验证「坏固件能下载、能跳转，但跑不通」这一预期行为。 */
+    uart_puts("[app] FAIL-MODE=1: hung\r\n");
     for (;;) {
-        /* 什么都不做，等看门狗出手 */
     }
 #elif APP_FAIL_MODE == 2
-    /* 【故障注入 2】一启动就踩非法地址，触发 HardFault。
-     * 此时 CPU 会停在自己的 HardFault_Handler 里，同样不再喂狗，
-     * 最终仍由看门狗把控制权交回 Bootloader。 */
+    /* 【故障注入 2】一启动就踩非法地址，触发 HardFault */
     uart_puts("[app] FAIL-MODE=2: deliberate HardFault\r\n");
     delay_ms(20U);
     *(volatile uint32_t *)0xFFFFFFF0UL = 0xDEADBEEFUL;
@@ -482,15 +427,13 @@ int main(void)
     }
 #endif
 
-    /* 主循环：每秒报一次存活，期间切成 100ms 小片逐片喂狗。
-     * IWDG 超时 6 秒，但喂狗间隔做小些更稳（也便于将来加长任务）。 */
+    /* 主循环：每秒报一次存活，切成 100ms 小片以便及时响应唤回指令 */
     for (;;) {
         uart_puts("[app] alive, tick=");
         uart_put_u32(g_tick++);
         uart_puts("\r\n");
 
         for (uint32_t i = 0; i < 10U; ++i) {
-            iwdg_feed();
             poll_boot_request();   /* 检测「进入 Bootloader」指令 */
             delay_ms(100U);
         }

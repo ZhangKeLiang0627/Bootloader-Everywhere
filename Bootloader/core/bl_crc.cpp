@@ -76,7 +76,6 @@ uint32_t crc32_flash(uint32_t addr, uint32_t len) noexcept
         }
         crc.update(buf, chunk);
         done += chunk;
-        wdg_feed();
     }
     return crc.value();
 }

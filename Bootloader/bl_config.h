@@ -8,7 +8,7 @@
  * 结构（移植时从上往下看）：
  *   一、目标芯片   —— 选一个现成预置，或照格式自己填
  *   二、Flash 分区 —— 由「一」自动派生，通常不用动
- *   三、启动行为   —— backdoor、回滚、看门狗
+ *   三、启动行为   —— 软件复位唤回、CRC 校验
  *   四、通信参数   —— 波特率、YMODEM 超时
  *   五、调试输出
  *
@@ -159,98 +159,18 @@
  * ==========================================================================*/
 
 /**
- * 「进入 Bootloader」的软件请求通道：APP 检测到升级指令后软复位，不写任何
- * 标志。Bootloader 靠复位原因识别「软件复位 + 固件 Valid 态」进入限时升级
- * 窗口（与 OpenBLT 的软复位后门同源，但零等待、零侵入）。
+ * 「进入 Bootloader」的软件请求通道：APP 检测到升级指令后软复位（不写标志），
+ * Bootloader 靠复位原因识别「软件复位 + Valid 态」进入限时升级窗口。
  *
- *   - 正常上电 / 硬件复位（POR/PIN）→ 直接跳 APP，零等待
- *   - 软件复位 + 固件 Valid 态      → 进限时窗口，时长 = BL_YMODEM_HANDSHAKE_MS
- *   - 软件复位 + 固件 Testing 态    → 升级完成复位，照常跳 APP（不误进窗口）
+ *   - 正常上电 / 硬件复位 → 直接跳 APP
+ *   - 软件复位 + Valid 态 → 进限时窗口（时长 = BL_YMODEM_HANDSHAKE_MS）
  *
- * APP 侧只需软件复位（见 Bootloader/bl_app.h 的 bl_request_update），
- * 不必包含本库其它文件，也不必知道配置区地址 / 槽位格式 / CRC 算法。
+ * APP 侧只需软复位（见 bl_app.h 的 bl_request_update）。
  */
 
-/**
- * 上电后监听 backdoor 字符的时间窗（毫秒）；0 表示关闭
- *
- * 已被上面的 RAM 标志方案取代，默认关闭。保留此开关是为兼容：
- * 若某产品既不方便改 APP、又想保留「上电连按 DEL 进 IAP」的旧习惯，
- * 可手动打开。但代价是每次正常启动都要空等这段时间。
- */
-#ifndef BL_BACKDOOR_WINDOW_MS
-#define BL_BACKDOOR_WINDOW_MS       0UL
-#endif
-
-/** backdoor 触发字符（0x7F = DEL，串口工具里好按且不与文本冲突） */
-#ifndef BL_BACKDOOR_CHAR
-#define BL_BACKDOOR_CHAR            0x7FU
-#endif
-
-/**
- * 固件连续启动尝试次数上限，超过则判定「能过校验但跑不起来」并回滚
- *
- * 这是防变砖里最难防的一类：CRC 全对，一跑就 HardFault 或死机。
- *
- * 具体用什么作判据由 BL_BOOT_SELF_CONFIRM 决定。默认策略下只有
- * 「被看门狗拉回来」才算一次失败尝试，所以这个数字的实际含义是
- * 「最多容忍连续几次看门狗复位」。
- */
-#ifndef BL_BOOT_MAX_ATTEMPTS
-#define BL_BOOT_MAX_ATTEMPTS        3UL
-#endif
-
-/**
- * 固件「自确认」策略 —— Bootloader 如何判断新固件能不能跑起来
- *
- *   1 = 看门狗自确认（默认，推荐）
- *       Bootloader 读复位原因（port 层的 reset_cause()）：
- *         · 看门狗复位 → APP 没喂狗，判定它跑不起来 → 计数 +1，超限回滚
- *         · 上电 / 按复位 → APP 上次活下来了 → 自动转为 Valid
- *
- *       **APP 侧零侵入**：不必包含本库的任何头文件，不必知道配置区地址、
- *       槽位格式、CRC 算法，只需要做它本来就该做的事 —— 喂狗。
- *       这也把「IWDG 启动后无法关闭、APP 必须喂狗」这条硬件约束
- *       从负担变成了判据来源。
- *       前提：BL_USE_WATCHDOG = 1（否则没有判据可用）。
- *
- *   0 = 不做自确认
- *       跳转前只做向量表 + 整镜像 CRC 校验，不计数、不回滚。
- *       适合 APP 不便喂狗，或者项目里已由上位机负责「升级后人工确认」的场景。
- *       代价：挡不住「能过校验却一跑就崩」的固件 —— 此时靠 Backdoor 人工救回。
- *       （Backdoor 永远可用，所以仍然不会变砖，只是需要人动手。）
- *
- * 另外：无论选哪种策略，APP 都可以主动调 bl::meta().confirm_app() 提前
- * 声明自己健康。这是可选的，不调也不影响默认策略工作。
- */
-#ifndef BL_BOOT_SELF_CONFIRM
-#define BL_BOOT_SELF_CONFIRM        1
-#endif
-
-/** 启动时是否额外做整镜像 CRC32 校验（更稳，代价是每次上电多花点时间） */
+/** 启动时是否做整镜像 CRC32 校验（更稳，代价是每次上电略慢） */
 #ifndef BL_BOOT_VERIFY_CRC32
 #define BL_BOOT_VERIFY_CRC32        1
-#endif
-
-/** 是否启用独立看门狗（IWDG） */
-#ifndef BL_USE_WATCHDOG
-#define BL_USE_WATCHDOG             1
-#endif
-
-/**
- * 看门狗超时（毫秒）
- *
- * 取值受限于「最长的单次阻塞操作」—— 中间没机会喂狗的那一段：
- *   - 擦除一个 128KB 扇区：典型 1 秒，数据手册最坏情况 4 秒
- *   - YMODEM 收帧等待：3 秒（实现里已切成小片并喂狗，不再受此限）
- * 所以默认取 6 秒，留一倍余量。
- *
- * 想收紧这个值就往 target 的 flash 驱动里改：不要用 HAL 的整扇区擦除
- * （它是一口气阻塞到底的），改成轮询 FLASH_SR 并在循环里喂狗，
- * 那样 2 秒也能撑得住。
- */
-#ifndef BL_WATCHDOG_TIMEOUT_MS
-#define BL_WATCHDOG_TIMEOUT_MS      6000UL
 #endif
 
 /* ============================================================================

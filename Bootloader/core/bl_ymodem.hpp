@@ -114,12 +114,7 @@ public:
     Ymodem(YmodemSink& sink, const Config& cfg) noexcept
         : sink_(sink), cfg_(cfg) {}
 
-    /**
-     * @brief 阻塞式接收一个固件文件
-     *
-     * 返回即表示会话已结束（成功或失败）。
-     * 全过程内部喂狗，调用方无需关心。
-     */
+    /// 阻塞式接收一个固件文件（返回即会话结束）
     Outcome receive() noexcept;
 
 private:

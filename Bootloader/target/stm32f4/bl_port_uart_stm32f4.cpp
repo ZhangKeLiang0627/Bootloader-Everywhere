@@ -45,17 +45,12 @@ void gpio_setup() noexcept
 
 namespace stm32f4 {
 
-UART_HandleTypeDef& console_uart() noexcept
-{
-    return g_uart;
-}
-
 void console_tx_flush(uint32_t timeout_ms) noexcept
 {
     const uint32_t start = HAL_GetTick();
     while (__HAL_UART_GET_FLAG(&g_uart, UART_FLAG_TC) == RESET) {
         if ((HAL_GetTick() - start) >= timeout_ms) {
-            break;      /* 串口没初始化时不能无限等 */
+            break;
         }
     }
 }
@@ -90,41 +85,7 @@ Status uart_init(uint32_t baudrate) noexcept
     return Status::Ok;
 }
 
-/* ========================================================================
- * 运行时改波特率（为将来的提速方案预留）
- *
- * 改完之后必须双方同步，否则链路立刻失步。
- * 本端先等发完，再改参数，最后清空收发缓冲，避免残留数据被当成新协议内容。
- * ======================================================================*/
-Status uart_set_baudrate(uint32_t baudrate) noexcept
-{
-    if (baudrate == 0U) {
-        return Status::BadParam;
-    }
-
-    stm32f4::console_tx_flush(100U);
-
-    g_uart.Init.BaudRate = baudrate;
-    if (HAL_UART_Init(&g_uart) != HAL_OK) {
-        return Status::Error;
-    }
-
-    uart_flush_rx();
-    return Status::Ok;
-}
-
-/* ========================================================================
- * 读取：逐字节收，带总超时
- *
- * 注意两次阻塞的叠加：HAL_UART_Receive 的超时是「单次调用」的超时，
- * 如果直接把它设成整个总超时（比如等首包的 3 秒），中间就没有机会喂狗，
- * 看门狗会先把我们复位。所以这里把单次调用的等待切成小片，片与片之间
- * 喂狗 —— 既保住总超时语义，又不会饿死狗。
- * ======================================================================*/
-namespace {
-constexpr uint32_t kMaxBlockingSliceMs = 50U;
-}
-
+/* ---- 读取：逐字节收，带总超时 ---- */
 Status uart_read(uint8_t* buf, uint32_t len,
                  uint32_t timeout_ms, uint32_t* out_read) noexcept
 {
@@ -152,12 +113,6 @@ Status uart_read(uint8_t* buf, uint32_t len,
             slice = 1U;                         /* 0 表示只试一次 */
         }
 
-        /* 切片：保证每 50ms 至少回到循环一次去喂狗 */
-        if (slice > kMaxBlockingSliceMs) {
-            slice = kMaxBlockingSliceMs;
-        }
-        wdg_feed();
-
         uint8_t ch = 0;
         if (HAL_UART_Receive(&g_uart, &ch, 1, slice) == HAL_OK) {
             buf[got++] = ch;
@@ -174,12 +129,7 @@ Status uart_read(uint8_t* buf, uint32_t len,
     return (got == len) ? Status::Ok : Status::Timeout;
 }
 
-/* ========================================================================
- * 非阻塞探测单字节
- *
- * 直接读数据寄存器才是真正的「不等待」：HAL_UART_Receive 即使超时传 0
- * 也会走一轮状态机，在 backdoor 轮询这种高频场景下不够轻量。
- * ======================================================================*/
+/// 非阻塞探测单字节：直接读 DR 才是真「不等待」
 bool uart_try_getc(uint8_t* ch) noexcept
 {
     if (ch == nullptr) {

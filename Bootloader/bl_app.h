@@ -15,10 +15,7 @@
  *   ...
  *   if (检测到升级指令) bl_request_update();
  *
- * 注意：
- *   - 调用前需已 include 芯片的 CMSIS 头（提供 NVIC_SystemReset）。
- *   - 软件复位后 Bootloader 只对「Valid 态」的固件开限时窗口；若 APP 仍
- *     处于 Testing 态（升级后首次运行），唤回需先上电/按复位转 Valid。
+ * 注意：调用前需已 include 芯片的 CMSIS 头（提供 NVIC_SystemReset）。
  */
 #ifndef BL_APP_H
 #define BL_APP_H
