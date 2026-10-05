@@ -475,7 +475,7 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>LUMOS/Drivers/CMSIS</GroupName>
+          <GroupName>LUMOS/Host</GroupName>
           <Files>
             <File>
               <FileName>system_stm32f4xx.c</FileName>
@@ -483,9 +483,29 @@
               <FilePath>../Core/Src/system_stm32f4xx.c</FilePath>
             </File>
             <File>
-              <FileName>bl_clock.c</FileName>
+              <FileName>main.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Core/Src/bl_clock.c</FilePath>
+              <FilePath>../Core/Src/main.c</FilePath>
+            </File>
+            <File>
+              <FileName>gpio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/gpio.c</FilePath>
+            </File>
+            <File>
+              <FileName>usart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/usart.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_it.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/stm32f4xx_it.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32f4xx_hal_msp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/stm32f4xx_hal_msp.c</FilePath>
             </File>
           </Files>
         </Group>

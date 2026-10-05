@@ -1,188 +1,103 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
+/* LUMOS-bootloader 的宿主工程：把芯片初始化好，然后把控制权交给库。
+ *
+ * 库不做任何初始化，也不带 main() —— 时钟、串口、Flash 接口时钟全在这里配好。
+ * usart.c / gpio.c / stm32f4xx_it.c / stm32f4xx_hal_msp.c 都是 CubeMX 生成的，
+ * 保持原样即可。
+ */
 #include "main.h"
 #include "usart.h"
 #include "gpio.h"
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-#include "common_inc.h"
-/* USER CODE END Includes */
+#include "bl.h"
 
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
+static void SystemClock_Config(void);
 
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
-/* Private variables ---------------------------------------------------------*/
-
-/* USER CODE BEGIN PV */
-
-/* USER CODE END PV */
-
-/* Private function prototypes -----------------------------------------------*/
-void SystemClock_Config(void);
-/* USER CODE BEGIN PFP */
-
-/* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-
-/* USER CODE END 0 */
-
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
 int main(void)
 {
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
   SystemClock_Config();
 
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART1_UART_Init();
-  /* USER CODE BEGIN 2 */
-  
-  // Invoke cpp-version main().
-  Main();
+  MX_USART1_UART_Init();      /* PA9 / PA10，115200 8N1 —— 与上位机一致 */
 
-  /* USER CODE END 2 */
+  blRun();                    /* 库的入口：决策 + 收固件，永不返回 */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
+  for (;;) {
   }
-  /* USER CODE END 3 */
 }
 
-/**
-  * @brief System Clock Configuration
- * @note  本文件不参与编译；实际生效的是 Core/Src/bl_clock.c。
- *        这里的值已同步为 25MHz/84MHz，避免将来误用它编译。
-  * @retval None
-  */
-void SystemClock_Config(void)
+/* 系统时钟：HSI + PLL → 84MHz
+ *
+ * 本板的 HSE 晶振起不来（实测 HSERDY 恒为 0），所以不依赖外部晶振：
+ *   HSI 16MHz --PLLM=16--> 1MHz --PLLN=336--> 336MHz --PLLP=4--> 84MHz
+ *   AHB=84MHz，APB1=42MHz，APB2=84MHz，Flash latency=2
+ *
+ * 没焊晶振、晶振虚焊、负载电容不匹配都照样跑。HSI 精度约 ±1%，
+ * 对 115200 波特率完全够用。
+ *
+ * 想换回外部晶振：PLLSource 改 RCC_PLLSOURCE_HSE、PLLM 改成晶振频率（MHz），
+ * 并把 stm32f4xx_hal_conf.h 里的 HSE_VALUE 设成一致。
+ */
+static void clockHsi16(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_OscInitTypeDef osc = {0};
+  RCC_ClkInitTypeDef clk = {0};
 
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 25;
-  RCC_OscInitStruct.PLL.PLLN = 336;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+  osc.OscillatorType      = RCC_OSCILLATORTYPE_HSI;
+  osc.HSIState            = RCC_HSI_ON;
+  osc.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  osc.PLL.PLLState        = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
     Error_Handler();
   }
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
+  clk.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                       RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  clk.SYSCLKSource   = RCC_SYSCLKSOURCE_HSI;
+  clk.AHBCLKDivider  = RCC_SYSCLK_DIV1;
+  clk.APB1CLKDivider = RCC_HCLK_DIV1;
+  clk.APB2CLKDivider = RCC_HCLK_DIV1;
+  if (HAL_RCC_ClockConfig(&clk, FLASH_LATENCY_0) != HAL_OK) {
     Error_Handler();
   }
 }
 
-/* USER CODE BEGIN 4 */
+static void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef osc = {0};
+  RCC_ClkInitTypeDef clk = {0};
 
-/* USER CODE END 4 */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
 
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
+  osc.OscillatorType      = RCC_OSCILLATORTYPE_HSI;
+  osc.HSIState            = RCC_HSI_ON;
+  osc.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  osc.PLL.PLLState        = RCC_PLL_ON;
+  osc.PLL.PLLSource       = RCC_PLLSOURCE_HSI;
+  osc.PLL.PLLM            = 16;
+  osc.PLL.PLLN            = 336;
+  osc.PLL.PLLP            = RCC_PLLP_DIV4;
+  osc.PLL.PLLQ            = 7;
+  if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
+    clockHsi16();
+    return;
+  }
+
+  clk.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                       RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  clk.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
+  clk.AHBCLKDivider  = RCC_SYSCLK_DIV1;
+  clk.APB1CLKDivider = RCC_HCLK_DIV2;
+  clk.APB2CLKDivider = RCC_HCLK_DIV1;
+  if (HAL_RCC_ClockConfig(&clk, FLASH_LATENCY_2) != HAL_OK) {
+    clockHsi16();
+  }
+}
+
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
+  for (;;) {
   }
-  /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
-}
-#endif /* USE_FULL_ASSERT */

@@ -9,7 +9,7 @@ LUMOS-bootloader 命令行构建 / ROM 测量 / 固件导出
 工具链路径可用环境变量 KEIL_ARMCLANG_BIN 覆盖。
 
 用法：
-    python tools/build.py                    # 默认芯片，-Os + 调试日志
+    python tools/build.py                    # 默认芯片，-Oz + 调试日志
     python tools/build.py -c stm32f405xx     # 换芯片
     python tools/build.py -c stm32f401xe --bin build/bl.bin
     python tools/build.py --no-log --opt -Oz # 发布版（关日志、压体积）
@@ -45,8 +45,7 @@ FE = os.path.join(KEIL, 'fromelf.exe')
 #   flash   —— Flash 容量，用来算链接区域与分区
 #   ram     —— SRAM 容量
 #   hse     —— 只用于 -DHSE_VALUE（宿主 system_stm32f4xx.c 需要）。
-#              库自己不配时钟，所以这个值与库无关 —— 库调用宿主的
-#              SystemClock_Config()，量体积时用空实现代替。
+#              库自己不配时钟，量体积时用空实现代替。
 # ---------------------------------------------------------------------------
 CHIPS = {
     'stm32f401xe': dict(device='STM32F401xE', startup='startup_stm32f401xe.s',
@@ -64,11 +63,9 @@ LIB_SRCS = ['bl.cpp', 'bl_port_stm32f4.cpp']   # 库本体 + STM32F4 移植实�
 
 # 只编译真正用到的 HAL 模块。全量编译会把没用到的模块也拖进来占 ROM。
 HAL_NEED = ['stm32f4xx_hal.c', 'stm32f4xx_hal_cortex.c', 'stm32f4xx_hal_rcc.c',
-            'stm32f4xx_hal_rcc_ex.c', 'stm32f4xx_hal_gpio.c',
-            'stm32f4xx_hal_uart.c', 'stm32f4xx_hal_flash.c',
+            'stm32f4xx_hal_rcc_ex.c', 'stm32f4xx_hal_gpio.c', 'stm32f4xx_hal_flash.c',
             'stm32f4xx_hal_flash_ex.c', 'stm32f4xx_hal_flash_ramfunc.c',
-            'stm32f4xx_hal_pwr.c', 'stm32f4xx_hal_pwr_ex.c',
-            'stm32f4xx_hal_dma.c']
+            'stm32f4xx_hal_pwr.c', 'stm32f4xx_hal_pwr_ex.c']
 
 # 宿主工程里必须保留的 CMSIS 文件（提供 SystemInit / SystemCoreClockUpdate）
 HOST_CMSIS = ['Core/Src/system_stm32f4xx.c']
@@ -133,14 +130,17 @@ def compile_all(chip: str, opt: str, defines: list, out: str, verbose=False):
 
     build(os.path.join(ROOT, 'MDK-ARM', prof['startup']), 'asm', 'startup')
 
-    # 库不配时钟，它调用宿主的 SystemClock_Config()。量「库本体」体积时给一个
-    # 空实现，免得把宿主那份 HAL 时钟代码（实测约 1.3KB）算进来。
+    # 库不初始化芯片，也不带 main()。量「库本体」体积时补一个最小宿主：
+    # 这三样在真实工程里都由 CubeMX 生成（见 Core/Src）。
     os.makedirs(out, exist_ok=True)
-    stub = os.path.join(out, 'bl_clock_stub.c')
+    stub = os.path.join(out, 'host_stub.c')
     with open(stub, 'w', encoding='utf-8', newline='\n') as f:
-        f.write('/* 量库体积用的空时钟实现，见 build.py 注释 */\n'
-                'void SystemClock_Config(void) { }\n')
-    build(stub, 'c', 'bl_clock_stub')
+        f.write('/* 量库体积用的最小宿主，见 build.py 注释 */\n'
+                '#include "bl.h"\n'
+                'void SystemClock_Config(void) { }\n'
+                'void HAL_MspInit(void) { }\n'
+                'int main(void) { blRun(); return 0; }\n')
+    build(stub, 'c', 'host_stub')
 
     return objs, errs
 

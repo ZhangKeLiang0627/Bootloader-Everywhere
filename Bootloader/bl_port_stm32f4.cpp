@@ -1,32 +1,12 @@
-/**
- * @file    bl_port_stm32f4.cpp
- * @brief   STM32F4 的移植实现 —— 换芯片时照这份再写一个
- *
- * 这是「库与芯片之间唯一的接触面」。bl.cpp 只调用 bl_port.h 声明的函数，
- * 一行都不会碰这里的硬件细节。
- *
- * 换到别的芯片：
- *   1. 复制本文件为 bl_port_<平台>.cpp
- *   2. 改下面「板级配置」区（串口用哪一路、哪几个脚）
- *   3. 照 bl_port.h 的注释逐项实现那几个函数
- *   4. bl.cpp 一个字都不用改
- *
- * 系统时钟不由本文件配置 —— 它调用宿主的 SystemClock_Config()（CubeMX 生成
- * 的工程天然有）。本文件只管串口 / Flash / 跳转这些真正的板级细节。
- *
- * 本实现基于 ST HAL，需要标准 CubeMX 工程的 Drivers/ 与 CMSIS。
- * 你也可以改用寄存器直写，只要满足 bl_port.h 的语义。
- */
+// STM32F4 的移植实现 —— 换芯片时照这份再写一个。
+// 库只调 bl_port.h 声明的函数，一行都不会碰这里；芯片初始化由宿主工程负责。
 
 #include "bl_port.h"
 #include "stm32f4xx_hal.h"
 #include <cstring>
 
-/* --------------------------------------------------------------------------
- * ★ 板级配置：改这几行就能换板子
- * -------------------------------------------------------------------------- */
-
-/* ---- 调试 / IAP 串口 ---- */
+// 板级配置：改这几行就能换板子。
+// 串口本身由宿主工程初始化（8N1、波特率与上位机一致），这里只声明库用哪一路。
 #define BL_UART_INSTANCE        USART1
 #define BL_UART_GPIO_PORT       GPIOA
 #define BL_UART_TX_PIN          GPIO_PIN_9
@@ -36,139 +16,17 @@
 #define BL_UART_CLK_ENABLE()    __HAL_RCC_USART1_CLK_ENABLE()
 #define BL_UART_GPIO_CLK_ENABLE() __HAL_RCC_GPIOA_CLK_ENABLE()
 
-/* 中断向量名（HardFault 直写寄存器时用不到，留给需要中断收发的场景） */
-#define BL_UART_IRQn            USART1_IRQn
-
 namespace bl {
 
-/* --------------------------------------------------------------------------
- * 移植层内部声明（本文件内共享）
- * -------------------------------------------------------------------------- */
-
-namespace stm32f4 {
-
-/// 等发送移位寄存器空（跳转前调用，避免最后几行日志被打断）
-void consoleTxFlush(uint32_t timeoutMs) noexcept;
-
-} // namespace stm32f4
-
-/* --------------------------------------------------------------------------
- * ① 系统底座：时钟树 / 时基 / 异常兜底
- * -------------------------------------------------------------------------- */
-
-/* ============================================================================
- * 对外：平台初始化
- * ==========================================================================*/
-namespace {
-
-/**
- * @brief 使能 FPU（CP10 / CP11 全访问）
- *
- * 复位后 CPACR = 0，含义是「禁止访问协处理器」。本工程按硬浮点编译
- * （-mfloat-abi=hard），只要执行到一条 VFP 指令，就会立刻触发
- * UsageFault(NOCP) 并被升级成 HardFault —— 现象是刚启动就卡死，
- * 而且从表面完全看不出跟浮点有关，非常难猜。
- *
- * ST 的 system_stm32f4xx.c 在 SystemInit 里做的第一件事就是它，
- * 这里保持相同的位置与语义：**任何可能用到浮点的代码之前**。
- */
-void fpuEnable() noexcept
-{
-    SCB->CPACR |= ((3UL << 20) | (3UL << 22));   /* CP10, CP11 全访问 */
-    __DSB();
-    __ISB();
-}
-
-} // namespace
-
-/**
- * 系统时钟由宿主工程配置 —— 库只有这一句声明，一行配置都没有。
- *
- * CubeMX 生成的工程天然带 SystemClock_Config()（在 main.c 里），把那个文件
- * 纳入编译即可；示例工程的实现在 Core/Src/bl_clock.c。
- *
- * 故意用强引用而不是弱符号：宁可「没提供就在链接期报错」，也不要运行期
- * 悄悄跑在 16MHz —— 后者除了慢一点毫无症状，很难发现。
- *
- * 如果宿主把 SystemClock_Config 和 main() 放在同一个文件里：把那个 main()
- * 去掉即可（库自带 main）。
- */
-extern "C" void SystemClock_Config(void);
-
-Status chipInit() noexcept
-{
-    /* 0. FPU 必须最先使能 —— 见 fpuEnable 的说明 */
-    fpuEnable();
-
-    /* 1. HAL 底座：中断优先级分组、1ms 时基、HAL_MspInit */
-    if (HAL_Init() != HAL_OK) {
-        return Status::Error;
-    }
-
-    /* 2. 系统时钟 */
-    SystemClock_Config();
-
-    /* 3. 时基要按最终时钟重算（HAL_Init 里是按 16MHz 算的） */
-    SystemCoreClockUpdate();
-    (void)HAL_InitTick(TICK_INT_PRIORITY);
-
-    return Status::Ok;
-}
-
-/* ============================================================================
- * 中断与异常处理
- *
- * 这些原本由 CubeMX 生成的 Core/Src/stm32f4xx_it.c 与 stm32f4xx_hal_msp.c
- * 提供。因为库不依赖宿主工程的 Core/Src，所以自己实现一份最精简的：
- * 只保留 HAL 时基需要的 SysTick，以及 HAL 底座需要的 MspInit。
- * ==========================================================================*/
-
-/** HAL 的 1ms 时基来源（tickMs / delayMs 都靠它） */
-extern "C" void SysTick_Handler(void)
-{
-    HAL_IncTick();
-}
-
-/**
- * HAL 底层依赖：使能 SYSCFG 与 PWR 时钟
- *
- * 缺 PWR 时钟的典型症状：HAL_RCC_ClockConfig 里配置调压器失败，
- * 时钟切不过去，但函数未必报错 —— 很难查，所以这里必须开。
- */
-extern "C" void HAL_MspInit(void)
-{
-    __HAL_RCC_SYSCFG_CLK_ENABLE();
-    __HAL_RCC_PWR_CLK_ENABLE();
-}
-
-/// 硬件异常兜底：直写串口汇报，然后死循环等调试器
-extern "C" void HardFault_Handler(void)
-{
-    static const char kMsg[] = "\r\n!! HARDFAULT in LUMOS-bootloader !!\r\n";
-
-    for (const char* p = kMsg; *p != '\0'; ++p) {
-        while ((USART1->SR & USART_SR_TXE) == 0U) {
-        }
-        USART1->DR = static_cast<uint32_t>(static_cast<unsigned char>(*p));
-    }
-
-    for (;;) {
-    }
-}
-
-/* --------------------------------------------------------------------------
- * ② Flash 驱动
- * -------------------------------------------------------------------------- */
+// ② Flash 驱动
 
 namespace {
 
-/* ============================================================================
- * F4 扇区布局规则
- *
- *   偏移 0     - 64KB  : S0..S3，每扇区 16KB
- *   偏移 64KB  - 128KB : S4，单扇区 64KB
- *   偏移 128KB - 末尾  : S5..，每扇区 128KB
- * ==========================================================================*/
+// F4 扇区布局规则（扇区大小不等）
+//
+// 偏移 0     - 64KB  : S0..S3，每扇区 16KB
+// 偏移 64KB  - 128KB : S4，单扇区 64KB
+// 偏移 128KB - 末尾  : S5..，每扇区 128KB
 constexpr uint32_t kSmallSize  = 16U * 1024U;
 constexpr uint32_t kSmallCount = 4U;
 constexpr uint32_t kMidSize    = 64U * 1024U;
@@ -224,16 +82,6 @@ constexpr uint32_t sectorSize(uint32_t idx) noexcept
 
 } // namespace
 
-/* ============================================================================
- * 初始化
- * ==========================================================================*/
-Status flashInit() noexcept
-{
-    /* F4 的 Flash 接口时钟由 HAL_Init 打开，这里只需确保处于锁定态 */
-    HAL_FLASH_Lock();
-    return Status::Ok;
-}
-
 uint32_t flashSectorSize(uint32_t addr) noexcept
 {
     if (!inFlash(addr)) {
@@ -255,13 +103,11 @@ uint32_t flashBytesToSectorEnd(uint32_t addr) noexcept
     return (sectorBase(idx) + sectorSize(idx)) - addr;
 }
 
-/* ============================================================================
- * 擦除
- *
- * core 层已保证 addr 落在扇区起始、len 是若干扇区之和；这里仍做独立校验，
- * 并额外拒绝擦除 Bootloader 自身 —— 就算上层逻辑写出 bug，
- * 也不可能把「重刷入口」擦掉。
- * ==========================================================================*/
+// 擦除
+//
+// core 层已保证 addr 落在扇区起始、len 是若干扇区之和；这里仍做独立校验，
+// 并额外拒绝擦除 Bootloader 自身 —— 就算上层逻辑写出 bug，
+// 也不可能把「重刷入口」擦掉。
 Status flashErase(uint32_t addr, uint32_t len) noexcept
 {
     if (len == 0U) {
@@ -328,13 +174,11 @@ Status flashErase(uint32_t addr, uint32_t len) noexcept
     return Status::Ok;
 }
 
-/* ============================================================================
- * 写入
- *
- * F4 编程单位是 32 位字。正常路径下 core 传入的地址与长度都是 4 的倍数
- * （YMODEM 数据区天然对齐、配置区槽为 64 字节），但这里仍处理尾巴不足
- * 一个字的情况：读出原字 → 合并 → 写回。
- * ==========================================================================*/
+// 写入
+//
+// F4 编程单位是 32 位字。正常路径下 core 传入的地址与长度都是 4 的倍数
+// （YMODEM 数据区天然对齐、配置区槽为 64 字节），但这里仍处理尾巴不足
+// 一个字的情况：读出原字 → 合并 → 写回。
 Status flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept
 {
     if (data == nullptr || len == 0U) {
@@ -385,9 +229,7 @@ Status flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept
     return Status::Ok;
 }
 
-/* ============================================================================
- * 读取（Flash 内存映射，直接拷贝）
- * ==========================================================================*/
+// 读取（Flash 内存映射，直接拷贝）
 Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept
 {
     if (buf == nullptr || len == 0U) {
@@ -397,85 +239,13 @@ Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept
     return Status::Ok;
 }
 
-/* --------------------------------------------------------------------------
- * ③ UART 驱动
- * -------------------------------------------------------------------------- */
-
+// 串口收发：直接用寄存器轮询。
+// 不依赖 HAL_UART，也不持有任何句柄 —— 宿主初始化好之后，库只负责搬字节。
 namespace {
-
-/** 控制台串口句柄：由本文件独占持有 */
-UART_HandleTypeDef gUart{};
-
-/** 配置 TX/RX 引脚复用。放在 uartInit 里而不是 MspInit，
- *  是为了让整个适配层不依赖 HAL 的回调约定，调用路径更直白。 */
-void gpioSetup() noexcept
-{
-    BL_UART_GPIO_CLK_ENABLE();
-    BL_UART_CLK_ENABLE();
-
-    GPIO_InitTypeDef gpio{};
-    gpio.Pin       = BL_UART_TX_PIN | BL_UART_RX_PIN;
-    gpio.Mode      = GPIO_MODE_AF_PP;
-    gpio.Pull      = GPIO_PULLUP;
-    gpio.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
-    gpio.Alternate = BL_UART_GPIO_AF;
-    HAL_GPIO_Init(BL_UART_GPIO_PORT, &gpio);
+constexpr uint32_t kLoopGuard = 200000U;    // 等标志位的兜底上限，防止硬件异常时死等
 }
 
-} // namespace
-
-namespace stm32f4 {
-
-void consoleTxFlush(uint32_t timeoutMs) noexcept
-{
-    const uint32_t start = HAL_GetTick();
-    while (__HAL_UART_GET_FLAG(&gUart, UART_FLAG_TC) == RESET) {
-        if ((HAL_GetTick() - start) >= timeoutMs) {
-            break;
-        }
-    }
-}
-
-} // namespace stm32f4
-
-/* ========================================================================
- * 初始化
- * ======================================================================*/
-Status uartInit(uint32_t baudrate) noexcept
-{
-    if (baudrate == 0U) {
-        return Status::BadParam;
-    }
-
-    gpioSetup();
-
-    gUart.Instance          = BL_UART_INSTANCE;
-    gUart.Init.BaudRate     = baudrate;
-    gUart.Init.WordLength   = UART_WORDLENGTH_8B;
-    gUart.Init.StopBits     = UART_STOPBITS_1;
-    gUart.Init.Parity       = UART_PARITY_NONE;
-    gUart.Init.Mode         = UART_MODE_TX_RX;
-    gUart.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
-    gUart.Init.OverSampling = UART_OVERSAMPLING_16;
-
-    if (HAL_UART_Init(&gUart) != HAL_OK) {
-        return Status::Error;
-    }
-
-    uartFlushRx();
-
-    /* 串口通了才能打印 —— 这也是唯一能看见「时钟到底配没配上」的地方：
-     * 若这里报 16000000，说明宿主没提供 SystemClock_Config，跑的是默认 HSI */
-    BL_LOG("[clk] sysclk=%lu Hz, uart=%lu baud\r\n",
-           static_cast<unsigned long>(HAL_RCC_GetSysClockFreq()),
-           static_cast<unsigned long>(baudrate));
-
-    return Status::Ok;
-}
-
-/* ---- 读取：逐字节收，带总超时 ---- */
-Status uartRead(uint8_t* buf, uint32_t len,
-                 uint32_t timeoutMs, uint32_t* outRead) noexcept
+Status uartRead(uint8_t* buf, uint32_t len, uint32_t timeoutMs, uint32_t* outRead) noexcept
 {
     uint32_t got = 0;
 
@@ -486,27 +256,17 @@ Status uartRead(uint8_t* buf, uint32_t len,
         return Status::BadParam;
     }
 
-    const uint32_t start = HAL_GetTick();
+    const uint32_t start = tickMs();
 
     while (got < len) {
-        uint32_t slice = timeoutMs;
-
-        if (timeoutMs != 0U) {
-            const uint32_t elapsed = HAL_GetTick() - start;
-            if (elapsed >= timeoutMs) {
-                break;                          /* 总超时 */
-            }
-            slice = timeoutMs - elapsed;
-        } else {
-            slice = 1U;                         /* 0 表示只试一次 */
+        if ((BL_UART_INSTANCE->SR & USART_SR_RXNE) != 0U) {
+            buf[got++] = static_cast<uint8_t>(BL_UART_INSTANCE->DR & 0xFFU);
+            continue;
         }
-
-        uint8_t ch = 0;
-        if (HAL_UART_Receive(&gUart, &ch, 1, slice) == HAL_OK) {
-            buf[got++] = ch;
-        } else if (timeoutMs == 0U) {
+        if (timeoutMs == 0U) {                      // 0 = 只试一次
             break;
-        } else if ((HAL_GetTick() - start) >= timeoutMs) {
+        }
+        if ((tickMs() - start) >= timeoutMs) {      // timeoutMs 是「总超时」
             break;
         }
     }
@@ -517,59 +277,61 @@ Status uartRead(uint8_t* buf, uint32_t len,
     return (got == len) ? Status::Ok : Status::Timeout;
 }
 
-/* ========================================================================
- * 写入
- * ======================================================================*/
 Status uartWrite(const uint8_t* buf, uint32_t len) noexcept
 {
     if (buf == nullptr || len == 0U) {
         return Status::BadParam;
     }
 
-    const uint32_t slice = 1000U + (len / 10U);      /* 按长度给足余量 */
+    for (uint32_t i = 0; i < len; ++i) {
+        uint32_t guard = 0;
+        while ((BL_UART_INSTANCE->SR & USART_SR_TXE) == 0U) {
+            if (++guard > kLoopGuard) {
+                return Status::Timeout;
+            }
+        }
+        BL_UART_INSTANCE->DR = buf[i];
+    }
 
-    if (HAL_UART_Transmit(&gUart, const_cast<uint8_t*>(buf), len, slice) != HAL_OK) {
-        return Status::Timeout;
+    // 等最后一个字节移完再返回：跳转 APP 前不丢日志
+    uint32_t guard = 0;
+    while ((BL_UART_INSTANCE->SR & USART_SR_TC) == 0U) {
+        if (++guard > kLoopGuard) {
+            break;
+        }
     }
     return Status::Ok;
 }
 
-/* ========================================================================
- * 清空接收缓冲
- * ======================================================================*/
 void uartFlushRx() noexcept
 {
-    /* 先清错误标志，否则后续接收会一直被阻塞 */
-    __HAL_UART_CLEAR_OREFLAG(&gUart);
-    __HAL_UART_CLEAR_FEFLAG(&gUart);
-    __HAL_UART_CLEAR_NEFLAG(&gUart);
-    __HAL_UART_CLEAR_PEFLAG(&gUart);
+    // 先读 SR 再读 DR，清掉 RXNE/ORE/NE/FE/PE（F4 的清除序列）
+    volatile uint32_t scratch = BL_UART_INSTANCE->SR;
+    scratch = BL_UART_INSTANCE->DR;
+    (void)scratch;
 
     uint32_t guard = 0;
-    while (__HAL_UART_GET_FLAG(&gUart, UART_FLAG_RXNE) != RESET && guard++ < 4096U) {
-        (void)gUart.Instance->DR;
+    while ((BL_UART_INSTANCE->SR & USART_SR_RXNE) != 0U && guard++ < 4096U) {
+        (void)BL_UART_INSTANCE->DR;
     }
+
+    // 关掉「接收类」中断源：宿主若开了 USART1 的 NVIC，IAP 期间的收字节
+    // 会触发中断风暴打断传输。库是轮询收的，这些中断源不需要。
+    BL_UART_INSTANCE->CR1 &= ~(USART_CR1_RXNEIE | USART_CR1_PEIE);
+    BL_UART_INSTANCE->CR3 &= ~USART_CR3_EIE;
 }
 
-/* --------------------------------------------------------------------------
- * ④ 跳转 APP / 读复位原因
- * -------------------------------------------------------------------------- */
-
-/* ========================================================================
- * 跳转到 APP
- *
- * 八个步骤缺一不可，顺序也不能乱。漏掉哪一步的典型症状：
- *   - 不停 SysTick       → APP 里 HAL_Delay 走时不对
- *   - 不复位 RCC         → APP 以为时钟还是 Bootloader 配的，串口波特率全错
- *   - 不清 NVIC 挂起标志 → APP 一开中断就冲进某个已挂起的中断服务函数
- *   - 不设 VTOR          → APP 的中断跳到 Bootloader 的向量表里
- *   - 不设 MSP           → 栈指针还停在 Bootloader 的栈上，一压栈就踩坏数据
- *   - 不清 CONTROL       → 若此前用过 PSP，APP 会在错误的栈上运行
- * ======================================================================*/
+// 跳转到 APP
+//
+// 八个步骤缺一不可，顺序也不能乱。漏掉哪一步的典型症状：
+// - 不停 SysTick       → APP 里 HAL_Delay 走时不对
+// - 不复位 RCC         → APP 以为时钟还是 Bootloader 配的，串口波特率全错
+// - 不清 NVIC 挂起标志 → APP 一开中断就冲进某个已挂起的中断服务函数
+// - 不设 VTOR          → APP 的中断跳到 Bootloader 的向量表里
+// - 不设 MSP           → 栈指针还停在 Bootloader 的栈上，一压栈就踩坏数据
+// - 不清 CONTROL       → 若此前用过 PSP，APP 会在错误的栈上运行
 void jumpToApp(uint32_t appBase) noexcept
 {
-    stm32f4::consoleTxFlush(100U);   /* 等最后几行日志发完再跳 */
-
     /* 取向量表前两字：初始栈顶与复位入口 */
     const uint32_t initialSp = *reinterpret_cast<volatile uint32_t*>(appBase);
     const uint32_t resetVec  = *reinterpret_cast<volatile uint32_t*>(appBase + 4U);
