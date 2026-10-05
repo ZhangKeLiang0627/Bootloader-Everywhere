@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bootloader-Everywhere</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">BE</span>
+    <div class="brand-text">
+      <h1>Bootloader-Everywhere</h1>
+      <p class="tagline">串口 IAP · 0xA5 帧协议 · 网页刷机</p>
+    </div>
+  </div>
+  <span class="badge off" id="status">未连接</span>
+</header>
+
+<main>
+
+  <section class="card">
+    <div class="card-head">
+      <h2><span class="num">1</span> 连接设备</h2>
+      <span class="stat">115200 8N1（固件固定）</span>
+    </div>
+    <div class="row">
+      <button id="btnConnect" class="primary">连接串口</button>
+      <button id="btnDisconnect" disabled>断开</button>
+      <label class="inline">从机地址
+        <input type="number" id="devId" value="1" min="1" max="127">
+      </label>
+    </div>
+    <p class="hint">
+      波特率由固件写死 115200，不做协商 —— 选了别的值反而连不上。
+      从机地址对应固件里的 <code>BL_DEVICE_ID</code>，默认 1。
+    </p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2><span class="num">2</span> 固件</h2>
+    </div>
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="file" accept=".bin" hidden>
+      <div class="dz-icon" id="dzIcon">⇪</div>
+      <p class="dz-text" id="dzText">点击选择固件，或拖拽 .bin 文件到这里</p>
+      <p class="dz-file" id="dzFile"></p>
+    </div>
+    <p class="hint">
+      固件需编译到 <code>0x08004000</code> 起始 —— Bootloader 占用前 16&nbsp;KB，
+      APP 的 IROM 起点与向量表偏移都要跟着对齐。
+    </p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2><span class="num">3</span> 升级</h2>
+      <span class="stat" id="stat"></span>
+    </div>
+    <button id="btnSend" class="primary" disabled>开始升级</button>
+    <div class="progress"><div class="bar" id="bar">0%</div></div>
+    <p class="hint">
+      点「开始升级」会自动把设备唤回 Bootloader（无论它在跑 APP 还是已在 IAP），
+      然后按 <code>START → DATA → END</code> 传输：每帧一应一答，板端会回读 Flash
+      重算 CRC32 供本页比对；出错时按板端给的地址续传，不会从头再来。
+    </p>
+  </section>
+
+  <section class="card grow">
+    <div class="card-head">
+      <h2><span class="num">4</span> 串口输出</h2>
+      <button id="btnClear" class="tiny">清空</button>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+
+</main>
+
+<footer>
+  <span>0xA5 帧 · CRC8</span><span>·</span><span>整镜像 CRC32 由板端回读自算</span>
+</footer>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
