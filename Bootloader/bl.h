@@ -166,17 +166,25 @@ void bl_run(void);
 #define BL_BOOT_MAGIC_STRING    "#Bootloader-Everywhere"
 #endif
 
+/* ---- 软件复位：写 SCB->AIRCR ----
+ *
+ * SCB->AIRCR 是内核的「应用中断与复位控制寄存器」。所有 Cortex-M
+ * （M0/M0+/M3/M4/M7）布局一致，所以不必包含 CMSIS / 芯片头文件，
+ * 效果与 NVIC_SystemReset() 完全等价，且零依赖。
+ *
+ * 写入必须携带钥匙 VECTKEY：高 16 位不是 0x05FA 时，硬件直接丢弃这次写入
+ * （ARM 的防误写机制），复位不会发生。
+ */
+#define BL_SCB_AIRCR            (*(volatile uint32_t *)0xE000ED0CUL)  /* SCB->AIRCR */
+#define BL_AIRCR_VECTKEY        (0x05FAUL << 16)      /* 写入钥匙，必须携带 */
+#define BL_AIRCR_SYSRESETREQ    (1UL << 2)            /* 置 1 触发软件复位 */
+
 /**
  * @brief 请求进入 Bootloader：只做一次软件复位，不写任何标志。
- *
- * 为什么不用 NVIC_SystemReset()：那需要包含 CMSIS 头，会让这个内联函数
- * 依赖芯片头文件。直接写 SCB->AIRCR 效果完全等价，且零依赖 ——
- * 所有 Cortex-M（M0/M0+/M3/M4/M7）的 AIRCR 布局一致。
  */
 static inline void bl_request_update(void)
 {
-    /* AIRCR = VECTKEY(0x05FA) | SYSRESETREQ(bit2) */
-    *(volatile uint32_t*)0xE000ED0CUL = 0x05FA0004UL;
+    BL_SCB_AIRCR = BL_AIRCR_VECTKEY | BL_AIRCR_SYSRESETREQ;
     for (;;) { }          /* 兜底：复位是异步的，这里不会往下走 */
 }
 
