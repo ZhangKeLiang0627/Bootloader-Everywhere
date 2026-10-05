@@ -2,7 +2,7 @@
 """
 构建 Bootloader-Everywhere 的测试 APP。
 
-产物链接到 0x08004000（BL_APP_BASE），供 Bootloader 通过 YMODEM 升级。
+产物链接到 0x08004000（BL_APP_BASE），供 Bootloader 通过串口升级。
 
 用法：
     python build_app.py                 # 编译并生成 build/app_test.bin

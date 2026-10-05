@@ -22,7 +22,7 @@
 
 ```
 上电 → 读 APP 区前两个字 → 合法？ → 是 → 跳转 APP（0x08004000），零等待
-                            └→ 否 → 留在 IAP 等 YMODEM 刷机
+                            └→ 否 → 留在 IAP 等上位机刷机
 ```
 
 而这两个字是**升级过程中最后才写进去的**。所以"合法"就等于"上一份固件完整刷完了"：
@@ -60,7 +60,7 @@
 
 1. 网页点「开始升级」→ 向串口逐字节发关键字 `#Bootloader-Everywhere`
 2. APP 匹配到完整关键字 → **自己做一次软件复位**
-3. Bootloader 读复位原因，发现是软件复位 → 开一个 **15 秒的限时窗口**等 YMODEM
+3. Bootloader 读复位原因，发现是软件复位 → 开一个 **15 秒的限时窗口**等上位机
 4. 窗口内收到首包就正常刷机；15 秒没等到东西，自动跳回 APP 继续跑
 5. 正常上电 / 按复位键 → **零等待**直接跳 APP，没有任何启动延迟
 
@@ -147,14 +147,15 @@ static void boot_btn_poll(void)
 
 | 工具 | 位置 | 用途 |
 |---|---|---|
-| **库本体（6 个源文件）** | `Bootloader/` | bl.h / bl.cpp / bl_protocol.h / bl_protocol.cpp / bl_port.h / bl_port_stm32f4.cpp / bl_config.h |
+| **库本体（7 个源文件）** | `Bootloader/` | bl.h / bl.cpp / protocol.h / protocol.cpp / bl_port.h / bl_port_stm32f4.cpp / bl_config.h |
 | 库文档（提交机制、用法、移植、坑） | `Bootloader/README.md` | 权威文档 |
 | 网页上位机 | `docs/`（web 分支） | 浏览器刷机，已上线 |
 | 命令行构建 | `tools/build.py` | 编译 + 量 ROM |
 | 板端工具 | `tools/board.py` | 备份/烧写/擦除/看串口 |
 | 测试固件编译 | `TestApp/build_app.py` | 编正常/故障测试固件（test-app 分支） |
-| 自动化测试 | `TestApp/tools/test_auto.py` | 一键跑升级/唤回/断流测试 |
-| 断电测试引导 | `TestApp/tools/power_test.py` | 提示你拔电的断电暴力测试 |
+| 上位机（命令行刷机） | `TestApp/tools/proto.py` | `send 固件.bin`；也能 `selftest` 校验两端口径 |
+| 板端回归测试 | `TestApp/tools/test_proto.py` | 一键跑 T1-T5（升级/连续升级/断流/篡改帧/跳号） |
+| 板端基础设施 | `TestApp/tools/board_test.py` | 烧写 / 复位 / 观察串口 / info |
 
 > **移植到别的工程时，只拷 `Bootloader/` 这一个目录就够** —— 仓库里的
 > `Core/ Drivers/ MDK-ARM/` 只是 STM32F401 的示例工程。

@@ -23,13 +23,13 @@
 ```
 README.md              入口导航（"从哪开始"）
 AGENTS.md / USER.md    给 AI / 给使用者
-Bootloader/            ★ 库本体，6 个源文件，0 子目录
+Bootloader/            ★ 库本体，7 个源文件，0 子目录
   README.md              库的唯一文档（提交机制 / 用法 / 移植 / 常见坑）
-  bl.h                   对外头文件：blRun() + Status（C 工程也能 include）
-  bl.cpp                 主体：日志 / CRC32 / 向量表校验 / 升级会话 / 决策 / 入口
-  bl_protocol.h          协议层声明：Ymodem / YmodemSink / Crc16
-  bl_protocol.cpp        协议层实现：YMODEM-1K + CRC16/XMODEM
-  bl_port.h              移植契约（11 个函数 + 扇区表）
+  bl.h                   对外头文件：blRun() + blUartRx() + Status（C 工程也能 include）
+  bl.cpp                 主体：日志 / CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+  protocol.h             载体层：Frame / Parser / encode / crc8（与业务无关，可整对拷走）
+  protocol.cpp           载体层实现：0xA5 帧编解码 + CRC8
+  bl_port.h              移植契约（12 个函数 + 扇区表）
   bl_port_stm32f4.cpp    STM32F4 实现（含板级配置：串口实例 / 引脚）
   bl_config.h            只需填 2 个数：BL_FLASH_SIZE / BL_BOOT_SIZE
 tools/                 开发工具（不属于库）
@@ -38,8 +38,8 @@ tools/                 开发工具（不属于库）
 Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
                        STM32F401 示例工程（不是库的一部分）
 UserApp/main.cpp       本工程自己的代码入口（见 §2.1）
-docs/                  设计文档（未实施的计划）
-  PROTOCOL_DESIGN.md     传输协议改造方案草案：拟用 COBS + 5 个命令替代 YMODEM
+docs/                  设计文档
+  PROTOCOL_DESIGN.md     协议设计：§0 是现行 0xA5 帧协议的规格与实现要点
 TestApp/               （仅 test-app 分支）测试 APP + 板端测试脚本
 build/                 编译产物
 ```
@@ -182,11 +182,11 @@ T4 窗口超时跳回 APP / T5 传输中断（探针验证 SP/PC 仍是 `0xFFFFF
 
 ## 6. 移植新芯片
 
-写 `bl_port.h` 的 11 个函数 + 一张扇区表：
+写 `bl_port.h` 的 12 个函数 + 一张扇区表：
 
 ```
 flashErase  flashWrite  flashRead
-uartRead  uartWrite  uartFlushRx
+uartRead  uartWrite  uartFlushRx  uartRxIrqHandler
 tickMs  delayMs
 resetCause  jumpToApp
 bootPinHeld        没有按钮的平台直接 return false;
@@ -217,6 +217,7 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
 |---|---|
 | 看门狗（IWDG）+ 自确认回滚 | 用户明确要求：IAP 是人在旁边刷的，放弃防回滚 |
 | 配置区 / `Meta` 类 / `kSlotMagic` / 槽位轮转 | 被「向量表最后写」取代（§3.1） |
+| YMODEM（第三方工具刷机的便利性） | 已整体删除，换成自定义 0xA5 帧。**别因为"通用工具能刷"再引入** —— 那正是换掉的代价 |
 | 串口 backdoor（上电 300ms 内按 DEL 进 IAP） | 鸡肋：拖慢每次启动，正常人也卡不准。**别和「按住硬件按钮上电」搞混 —— 那个是保留功能（§3.2），一起删掉就少了一条救命通道** |
 | RAM 标志（APP 写 magic 后软复位） | 被「纯复位原因」取代，APP 侧零侵入 |
 | 库自带 `main()` / `chipInit` / `flashInit` / `uartInit` | 库不初始化芯片、不带 main（§1） |
@@ -262,28 +263,21 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ---
 
-## 10. 未实施的计划（方向已定，不要提前动手）
+## 10. 传输协议：已换成自定义 0xA5 帧（2026-10-06，分支 protocol-v2）
 
-### 传输协议：拟换掉 YMODEM
+设计见 **`docs/PROTOCOL_DESIGN.md`**（§0 是现行规格，第一至三章为调研记录）。要点：
 
-现状与方向见 **`docs/PROTOCOL_DESIGN.md`**（草案，含调研与包格式）。摘要：
+- **载体层 = `protocol.{h,cpp}`**：`A5 | ID | CMD | len:2 LE | Data≤1024 | CRC8 | 03`。
+  只依赖 `stdint.h`，与芯片、业务无关 —— **可以整对拷到 APP / 上位机 / 别的工程复用**。
+  `CMD` 的 bit7 = 方向位；CRC8（SMBUS，MSB-first）覆盖 `[ID..Data]`，不含头尾。
+- **IAP 命令层在 `bl.cpp`**：`START`(size/crc32/sp/pc) → `DATA`(addr/total/index/vlen/cumCrc32/data)
+  → `END`。16 个错误码见设计文档 §0.5.7。
+- **DATA 一应一答**；**先校验后写入**（Flash 只能 1→0，先写坏就要整扇区擦除才能纠正）；
+  写后**读回 Flash 重算 CRC32**（只对收到的字节累加与主机算的必然相同，没有信息量）。
+- 传输层**中断接收**：`uartRxIrqHandler` + 512 B 环形缓冲，寄存器实现，不用 HAL_UART。
+  宿主只需在 `USART1_IRQHandler` 里调 `blUartRx()`，**不要**再调 `HAL_UART_IRQHandler`。
+- 上位机 `TestApp/tools/proto.py`；板端回归 `TestApp/tools/test_proto.py`（T1-T5）。
 
-- **动机**：协议层 508 行占库 27%、1038 B Code 占库本体 20%，其中大半是 YMODEM 的包袱
-  （双包长 / `~seq` 反码 / ASCII 大小 / 空首包 / `EOT→NAK→C→EOT` / CAN 连发两次）。
-- **方向**：**COBS 成帧**（开销 ≤0.4%、可在下一个 `0x00` 重同步）套 **5 个命令**
-  （`SYNC` / `START` / `DATA` / `END` + `ACK`/`NAK`），形态照 **esptool**（业界最普及、
-  协议文档公开）。`DATA` **不逐帧应答**，靠 `NAK(expectOffset)` 做断点重传，
-  最终仍由**回读整片 CRC32** 兜底。
-- **许可**：esptool 代码是 GPLv2 **不可抄**，但协议是公开规范，按文档自行实现无问题；
-  COBS 用 BSD 参考实现的算法自行编写。
-- **代价**：会失去"任何第三方工具都能刷"这个 YMODEM 的好处（只剩自己的网页与脚本）。
+> ⚠️ **不要再引入 YMODEM**（实现已整体删除）。"任何第三方工具都能刷"这个便利性是有意
+> 放弃的 —— 换来了可读的帧格式、精确的错误定位与可扩展的命令空间，代价见设计文档「代价与风险」。
 
-**换协议时 `bl.cpp` 预期一个字都不用改** —— 解耦点已存在：
-
-```cpp
-class Session final : public YmodemSink { ... };   // bl.cpp 里
-```
-
-`Session` 只依赖 `onFileStart / onFileData / onFileEnd` 三个回调，新协议实现同一组回调即可。
-
-> ⚠️ 在用户明确要求开始之前，**不要动协议层**。先把它当参考文档。

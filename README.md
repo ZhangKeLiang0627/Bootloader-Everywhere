@@ -26,10 +26,10 @@
 | **想用这个库 / 理解它** | [`Bootloader/README.md`](Bootloader/README.md) ← 从这里开始 |
 | 想把它移植到别的芯片 | 同上，「移植（换芯片）」一节 |
 | 想改 Flash 分区 / 超时 | [`Bootloader/bl_config.h`](Bootloader/bl_config.h) |
-| 想改 YMODEM 协议 | [`Bootloader/bl_protocol.cpp`](Bootloader/bl_protocol.cpp) |
+| 想改帧协议 / 载体层 | [`Bootloader/protocol.cpp`](Bootloader/protocol.cpp) |
 | 想改升级流程 / 启动决策 | [`Bootloader/bl.cpp`](Bootloader/bl.cpp) |
 | 想用网页刷机 | 上面的在线地址，或 web 分支的 `docs/` |
-| 想跑自动化/断电测试 | `TestApp/tools/`（test-app 分支） |
+| 想跑板端回归测试 | `TestApp/tools/test_proto.py`（test-app 分支） |
 | **接手开发（人或 AI）** | [`AGENTS.md`](AGENTS.md) |
 | 只想快速上手用一下 | [`USER.md`](USER.md) |
 

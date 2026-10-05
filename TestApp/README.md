@@ -3,7 +3,7 @@
 一个**最小但真实**的 APP，用来验证 Bootloader 的完整升级链路：
 
 ```
-Bootloader 启动 → 等 YMODEM → 接收固件 → 擦除/写入 APP 区
+Bootloader 启动 → 等上位机 → 接收固件 → 擦除/写入 APP 区
     → 回读校验 CRC → 写回向量表前两个字（提交）→ 直接跳转到 APP → APP 正常运行
 ```
 
@@ -21,11 +21,9 @@ TestApp/
 ├── link_app.sct         链接脚本：整个镜像从 0x08004000 开始，上限 368KB
 ├── build_app.py         构建脚本（armclang + armasm + armlink）
 └── tools/
-    ├── ymodem_send.py   YMODEM-1K 上位机（也是网页版的协议参照）
-    ├── board_test.py    板端测试驱动（烧写 / 进 IAP / 升级 / 观察）
-    ├── test_auto.py     自动化暴力测试编排（T1-T5）
-    ├── power_test.py    断电暴力测试引导（需人工配合拔电）
-    └── verify_window.py 软件复位唤回 + 15s 窗口链路验证
+    ├── proto.py         载体层参考实现 + 命令行升级上位机（也是网页端的协议参照）
+    ├── test_proto.py    板端回归测试 T1-T5
+    └── board_test.py    板端基础设施（烧写 / 复位 / 观察串口 / info）
 ```
 
 ## 构建
@@ -43,10 +41,12 @@ python TestApp/build_app.py
 
 ## 升级
 
-板子在 IAP 等待状态时（串口能看到它周期性发 `C`）：
+板子在 IAP 等待时（按住 PC0 上电，或 APP 收到唤回关键字后软复位）：
 
 ```bash
-python TestApp/tools/ymodem_send.py COM3 build/app_test.bin
+python TestApp/tools/proto.py send build/app_test.bin      # 默认 COM3
+python TestApp/tools/proto.py selftest                     # 只校验两端口径，不碰串口
+python TestApp/tools/test_proto.py                         # 一键跑 T1-T5
 ```
 
 预期输出：
@@ -102,7 +102,7 @@ SCB_ICSR = (1UL << 25);   /* PENDSTCLR */
 而 APP 的向量表里 `SysTick_Handler` 通常是空的（`Default_Handler`），
 于是直接卡死在异常处理里 —— 同样表现为"完全不输出"。
 
-Bootloader 侧已经修掉了根因（见 `bl_port_system_stm32f4.cpp` 的说明），
+Bootloader 侧已经修掉了根因（见 `bl_port_stm32f4.cpp` 的说明），
 这里再清一遍是廉价的双保险。
 
 ## 启动阶段标记（诊断技巧）

@@ -2,7 +2,7 @@
 
 串口 IAP Bootloader，可移植库。给一个 bin 就能刷进 APP 区，**任何时刻断电都不会变砖**。
 
-- 协议：YMODEM-1K，网页端上位机在 https://zhangkeliang0627.github.io/Bootloader-Everywhere/
+- 协议：自定义 0xA5 帧（见 `docs/PROTOCOL_DESIGN.md`），网页端上位机在 https://zhangkeliang0627.github.io/Bootloader-Everywhere/
 - 库不初始化芯片，也不带 `main()` —— 芯片由宿主工程带起来，库只被 `blRun()` 调一次
 - 不依赖 stdio，不用动态内存，C++11 无异常无 RTTI
 
@@ -10,17 +10,19 @@
 
 ```
 Bootloader/
-├── bl.h                 对外头文件：blRun() + Status（C 工程也能 include）
-├── bl.cpp               主体：日志 / CRC32 / 向量表校验 / 升级会话 / 决策 / 入口
-├── bl_protocol.h        协议层声明：Ymodem / YmodemSink / Crc16
-├── bl_protocol.cpp      协议层实现：YMODEM-1K 接收端 + CRC16/XMODEM
-├── bl_port.h            移植契约：11 个函数 + 一张扇区表
+├── bl.h                 对外头文件：blRun() + blUartRx() + Status（C 工程也能 include）
+├── bl.cpp               主体：日志 / CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+├── protocol.h           载体层：Frame / Parser / encode / crc8（与业务无关）
+├── protocol.cpp         载体层实现：0xA5 帧编解码 + CRC8
+├── bl_port.h            移植契约：12 个函数 + 一张扇区表
 ├── bl_port_stm32f4.cpp  STM32F4 现成实现（换芯片照它再写一份）
-└── bl_config.h          分区参数 + YMODEM 参数 + 日志开关
+└── bl_config.h          分区参数 + 协议参数 + 日志开关
 ```
 
-没有子目录。**要用库 = 拷这 6 个源文件**（`bl_port.h` 与 `bl_protocol.h` 是声明，
-按需要拷）。协议层单独成文件只为读起来清楚 —— 改协议看 `bl_protocol.*`，改决策/升级流程看 `bl.cpp`。
+没有子目录。**要用库 = 拷这 7 个源文件**（头文件是声明，按需要拷）。
+
+`protocol.*` 是**通用载体层** —— 只依赖 `stdint.h`，不认识芯片也认识业务，
+可以整对拷到 APP、上位机、别的工程里复用。改帧格式看 `protocol.*`，改升级流程看 `bl.cpp`。
 
 ## 怎么用（三步）
 
@@ -109,27 +111,29 @@ APP 区最前面两个字是向量表的 **SP**（初始栈顶）和 **PC**（�
 ## 升级流程（正常一次）
 
 ```
-上位机                                  Bootloader
+上位机                                    Bootloader
   │ 发 "#Bootloader-Everywhere"（APP 收到后软复位）
-  │                                      上电 → 读复位原因 = 软件复位
-  │                                      → 向量表合法 → 进 15s 限时窗口
-  │ ◄──────────────── 'C' ────────────── 窗口内主动发握手
-  │ 首包含文件名 + 大小 ─────────────────► 记下 size，擦除 APP 区
-  │ ◄──────────────── 'C' ──────────────
-  │ 数据包（1KB/包）────────────────────► 逐包写 Flash
-  │ EOT + 结束包 ───────────────────────► 回读校验 → 写 SP/PC → 提交
-  │                                      跳新固件
+  │                                        上电 → 复位原因 = 软件复位
+  │                                        → 向量表合法 → 进 15s 唤回窗口
+  │ START: size / crc32 / sp / pc ────────► 校验向量表 → 擦除 APP 区（数秒）
+  │ ◄───────── OK + blockSize ────────────
+  │ DATA: addr / total / index / vlen /
+  │       cumCrc32 / 数据（512 B 一帧）───► 交叉校验头部 → 比累积 CRC32
+  │                                        → 写 Flash → 读回重算 → 应答
+  │ ◄──── OK + cumCrc32 + 期望地址 ───────   （错帧回 NAK，主机从期望地址续传）
+  │ END ──────────────────────────────────► 总 CRC32 比对 → 整片回读校验
+  │                                        → 写 SP/PC（提交）→ 应答 → 跳 APP
 ```
 
 窗口内没有上位机来（15s）→ 自动跳回 APP，不用重新上电。
 
 ## 移植（换芯片）
 
-写 `bl_port.h` 的 11 个函数 + 一张扇区表，`bl.cpp` 一个字都不用改：
+写 `bl_port.h` 的 12 个函数 + 一张扇区表，`bl.cpp` 一个字都不用改：
 
 ```
 flashErase  flashWrite  flashRead
-uartRead  uartWrite  uartFlushRx
+uartRead  uartWrite  uartFlushRx  uartRxIrqHandler
 tickMs  delayMs
 resetCause  jumpToApp
 bootPinHeld         （没按钮的直接 return false）
@@ -174,4 +178,4 @@ port 用 HAL 收发串口，所以要能拿到宿主的句柄名 —— 板级�
 | 整份固件（库 + 宿主 + HAL + CMSIS） | 13008 B，16KB 区余量 3376 B |
 | 库本体（`tools/build.py` 量库 + port，不含宿主） | 8876 B |
 | 关日志（`-DBL_DEBUG_LOG=0`） | 再省约 2.7KB |
-| 真板回归 | `TestApp/tools/test_auto.py` T1-T5 全通过 |
+| 真板回归 | `TestApp/tools/test_proto.py` T1-T5 全通过（5/5） |
