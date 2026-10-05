@@ -188,6 +188,21 @@ void SysTick_Handler(void)
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
 
+  /* BL 指示灯（PC13）：每 500ms 翻转一次。
+   *
+   * 只要这个中断在跑，就说明当前固件是 Bootloader —— 因为库在跳转到 APP
+   * 之前会关掉包括 SysTick 在内的所有中断，跳过去之后这个中断就不再执行了。
+   * 所以「灯在闪 = 在 Bootloader」，肉眼即可判断。
+   *
+   * 周期改这里：500 = 0.5 秒翻转一次（亮 0.5s、灭 0.5s）。 */
+  {
+    static uint32_t ledTicks = 0U;
+
+    if (++ledTicks >= 500U) {
+      ledTicks = 0U;
+      GPIOC->ODR ^= GPIO_PIN_13;
+    }
+  }
   /* USER CODE END SysTick_IRQn 1 */
 }
 

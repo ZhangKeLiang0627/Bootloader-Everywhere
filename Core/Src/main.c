@@ -11,6 +11,7 @@
 
 static void SystemClock_Config(void);
 static void bootPinInit(void);
+static void bootLedInit(void);
 
 int main(void)
 {
@@ -21,6 +22,7 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();      /* PA9 / PA10，115200 8N1 —— 与上位机一致 */
   bootPinInit();              /* PC0：按住它上电 = 留在 IAP（见下） */
+  bootLedInit();              /* PC13：BL 运行期间闪烁，一眼看出有没有进 Bootloader */
 
   blRun();                    /* 库的入口：决策 + 收固件，永不返回 */
 
@@ -46,6 +48,35 @@ static void bootPinInit(void)
   btn.Mode = GPIO_MODE_INPUT;
   btn.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &btn);
+}
+
+/* BL 指示灯：PC13 推挽输出。
+ *
+ * 用途：Bootloader 固件运行期间，SysTick 中断每隔 500ms 翻转一次这个脚
+ * （见 stm32f4xx_it.c 的 SysTick_Handler），于是肉眼就能判断：
+ *
+ *   - 灯在闪      → 芯片正在跑 Bootloader（按住按钮上电 / APP 区是空的）
+ *   - 灯不闪      → 没进 BL（已跳到 APP，或运行的是 APP 固件）
+ *
+ * 不关心 LED 接法：无论高电平点亮还是低电平点亮，翻转都会让它闪。
+ *
+ * ⚠️ PC13 属于 VBAT 供电域，驱动能力受限（数据手册：灌电流 ≤3mA、速度 ≤2MHz），
+ *    所以用低速。建议接成「低电平点亮」——LED 阳极经限流电阻接 3V3，
+ *    阴极接 PC13，由引脚灌电流。
+ */
+static void bootLedInit(void)
+{
+  GPIO_InitTypeDef led = {0};
+
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  led.Pin   = GPIO_PIN_13;
+  led.Mode  = GPIO_MODE_OUTPUT_PP;
+  led.Pull  = GPIO_NOPULL;
+  led.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &led);
+
+  GPIOC->BSRR = GPIO_PIN_13;    /* 起始置高（低电平点亮时即熄灭） */
 }
 
 /* 系统时钟：HSI + PLL → 84MHz
