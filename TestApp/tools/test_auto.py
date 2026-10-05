@@ -10,11 +10,11 @@
     python test_auto.py --only T3   # 只跑某一项
 
 测试项：
-    T1  正常升级          —— 软件复位进窗口 → YMODEM 传输 → 校验 → 跳新固件
-    T2  连续升级压力 x5   —— 反复升级正常固件，验证配置区槽位轮转无累积错误
+    T1  正常升级          —— 软件复位进窗口 → YMODEM 传输 → 回读校验 → 提交 → 跳新固件
+    T2  连续升级压力 x5   —— 反复升级正常固件，验证反复擦写无累积错误
     T3  软件复位唤回      —— APP 运行态复位后进入限时窗口（IAP_TIMED），不升级
     T4  窗口超时跳回 APP  —— 15s 无上位机 → 自动跳回 APP
-    T5  传输中断不变砖    —— 首包后断流，状态保持 DOWNLOAD、停 IAP 可重刷
+    T5  传输中断不变砖    —— 首包后断流 → SP/PC 仍是 0xFF → 停在 IAP 可重刷
 """
 
 import os
@@ -36,6 +36,7 @@ PORT = "COM3"
 TARGET = "stm32f401retx"
 
 APP_TEST = os.path.join(BUILD, "app_test.bin")
+APP_BASE = 0x08004000        # 与 bl_config.h 的 BL_APP_BASE 一致
 
 RESULTS = []
 
@@ -137,6 +138,27 @@ def reset_and_capture(seconds=5.0):
         ser.close()
 
 
+def probe_head():
+    """读 APP 区开头 64 字节，返回 (SP, PC, 第 8 字节起是否有已写入的数据)。
+
+    这是验证「向量表最后写」机制的决定性证据：传输中断后，
+    SP/PC 应该还是擦除态 0xFFFFFFFF，而其后紧跟的数据块已经写进去了。
+    """
+    s = open_probe(TARGET)
+    try:
+        s.open()
+        t = s.target
+        t.halt()
+        raw = bytes(t.read_memory_block8(APP_BASE, 64))
+        t.resume()
+    finally:
+        s.close()
+    sp = int.from_bytes(raw[0:4], "little")
+    pc = int.from_bytes(raw[4:8], "little")
+    written = any(x != 0xFF for x in raw[8:64])
+    return sp, pc, written
+
+
 def ensure_app_running():
     """把设备带到一个「有效固件正在跑」的干净起点。"""
     ser = serial.Serial(PORT, DEFAULT_BAUD, timeout=0.05)
@@ -160,7 +182,7 @@ def T1_normal_upgrade():
     raw = window_and_upgrade(APP_TEST, 6.0)
     txt = raw.decode("utf-8", "replace")
     done = "outcome=DONE" in txt
-    jumped = "upgrade done, jumping" in txt
+    jumped = "jumping to app" in txt
     alive = "alive" in txt
     ok = done and jumped and alive
     record("T1", "正常升级并直接跳转", ok,
@@ -199,7 +221,7 @@ def T4_window_timeout():
     """窗口内 15s 无上位机 → 超时跳回 APP。"""
     ensure_app_running()
     txt = reset_and_capture(19.0).decode("utf-8", "replace")
-    timeout = "upgrade window timeout" in txt
+    timeout = "window timeout" in txt
     jumped = "jumping to app" in txt
     alive = "alive" in txt
     ok = timeout and jumped and alive
@@ -208,7 +230,11 @@ def T4_window_timeout():
 
 
 def T5_interrupted_transfer():
-    """首包 + 1 个数据包后断流 → 状态保持 DOWNLOAD、停在 IAP 可重刷。"""
+    """首包 + 1 个数据包后断流。
+
+    期望：SP/PC 没被提交（仍是 0xFF），所以上电判「无可启动固件」留在 IAP；
+    而其后的数据块已经写进 Flash —— 正好证明「提交 = 写这两个字」。
+    """
     ensure_app_running()
     ser = serial.Serial(PORT, DEFAULT_BAUD, timeout=0.05)
     try:
@@ -218,7 +244,7 @@ def T5_interrupted_transfer():
         if b"C" not in read_for(ser, 2.0):
             record("T5", "传输中断不变砖", False, "未进入等待")
             return
-        # 发首包：触发 mark_download + 擦除。用日志判断是否被接受，
+        # 发首包：触发擦除。用日志判断是否被接受，
         # 不去盲等 ACK —— bootloader 会周期性补发 'C'，盲等容易读错字节。
         payload = (b"test_interrupt.bin\x00" + b"2000 ").ljust(128, b"\x00")[:128]
         crc = crc16_xmodem(payload)
@@ -241,12 +267,17 @@ def T5_interrupted_transfer():
 
     # 断流后复位，检查 bootloader 是否正确停在 IAP
     txt = reset_and_capture(5.0).decode("utf-8", "replace")
-    download = "DOWNLOAD" in txt
-    iap = "decision: IAP" in txt or "waiting for YMODEM" in txt
+    iap = "decision: IAP" in txt
     bricked = "decision: JUMP" in txt
-    ok = download and iap and not bricked
-    record("T5", "传输中断不变砖", ok,
-           "DOWNLOAD=%s IAP=%s 误跳转=%s" % (download, iap, bricked))
+
+    # 决定性证据：SP/PC 未提交，而其后的数据已写入
+    sp, pc, data_written = probe_head()
+    spc_erased = (sp == 0xFFFFFFFF) and (pc == 0xFFFFFFFF)
+
+    ok = iap and (not bricked) and spc_erased and data_written
+    record("T5", "传输中断不变砖（SP/PC 未提交）", ok,
+           "IAP=%s 误跳转=%s sp=0x%08X pc=0x%08X 数据已写=%s"
+           % (iap, bricked, sp, pc, data_written))
 
 
 def main():
