@@ -37,8 +37,9 @@ tools/                 开发工具（不属于库）
   board.py               pyocd 板端操作（备份/烧写/擦除/看串口）
 Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
                        STM32F401 示例工程（不是库的一部分）
-UserApp/main.cpp       本工程自己的代码入口（见下）
-                       STM32F401 示例工程（CubeMX + Keil），非库的一部分
+UserApp/main.cpp       本工程自己的代码入口（见 §2.1）
+docs/                  设计文档（未实施的计划）
+  PROTOCOL_DESIGN.md     传输协议改造方案草案：拟用 COBS + 5 个命令替代 YMODEM
 TestApp/               （仅 test-app 分支）测试 APP + 板端测试脚本
 build/                 编译产物
 ```
@@ -258,3 +259,31 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 署名行前空一行。git 身份用 `kkl / 1184665829@qq.com`。
 
 三分支改动要一起同步（`main` / `test-app` / `web`），文档改动尤其别漏。
+
+---
+
+## 10. 未实施的计划（方向已定，不要提前动手）
+
+### 传输协议：拟换掉 YMODEM
+
+现状与方向见 **`docs/PROTOCOL_DESIGN.md`**（草案，含调研与包格式）。摘要：
+
+- **动机**：协议层 508 行占库 27%、1038 B Code 占库本体 20%，其中大半是 YMODEM 的包袱
+  （双包长 / `~seq` 反码 / ASCII 大小 / 空首包 / `EOT→NAK→C→EOT` / CAN 连发两次）。
+- **方向**：**COBS 成帧**（开销 ≤0.4%、可在下一个 `0x00` 重同步）套 **5 个命令**
+  （`SYNC` / `START` / `DATA` / `END` + `ACK`/`NAK`），形态照 **esptool**（业界最普及、
+  协议文档公开）。`DATA` **不逐帧应答**，靠 `NAK(expectOffset)` 做断点重传，
+  最终仍由**回读整片 CRC32** 兜底。
+- **许可**：esptool 代码是 GPLv2 **不可抄**，但协议是公开规范，按文档自行实现无问题；
+  COBS 用 BSD 参考实现的算法自行编写。
+- **代价**：会失去"任何第三方工具都能刷"这个 YMODEM 的好处（只剩自己的网页与脚本）。
+
+**换协议时 `bl.cpp` 预期一个字都不用改** —— 解耦点已存在：
+
+```cpp
+class Session final : public YmodemSink { ... };   // bl.cpp 里
+```
+
+`Session` 只依赖 `onFileStart / onFileData / onFileEnd` 三个回调，新协议实现同一组回调即可。
+
+> ⚠️ 在用户明确要求开始之前，**不要动协议层**。先把它当参考文档。
