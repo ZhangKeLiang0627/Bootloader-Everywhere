@@ -1,7 +1,7 @@
-// 移植契约：库与芯片之间唯一的耦合面。换芯片就写这 11 个函数 + 一张扇区表。
+// 移植契约：库与芯片之间唯一的耦合面。换芯片就写这 12 个函数 + 一张扇区表。
 //
-// 库不做任何初始化 —— 时钟、串口、Flash 接口时钟都由宿主工程负责，
-// 本层只提供「操作」。已经有一份现成的 STM32F4 实现：bl_port_stm32f4.cpp。
+// 库不做任何外设初始化 —— 时钟、串口、Flash 接口时钟、按钮引脚都由宿主工程负责，
+// 本层只提供「操作」。现成的 STM32F4 实现见 bl_port_stm32f4.cpp。
 //
 // 三条约定：
 //   · 失败一律用 Status 返回，不用异常、不用动态内存
@@ -14,30 +14,26 @@
 
 namespace bl {
 
-// 复位原因。只保留判定用得到的几种，其余（欠压/低功耗等）归入 Unknown，
-// 一律按「不是软件复位」处理。
+// 复位原因。只保留判定用得到的几种，其余（欠压 / 低功耗等）一律按「不是软件复位」处理。
 enum class ResetCause : uint32_t {
     Unknown  = 0,
-    PowerOn,        // 上电、掉电复位
-    Pin,            // NRST 引脚复位（用户按复位键）
+    PowerOn,
+    Pin,            // NRST 引脚复位
     Software,       // 软件复位（APP 主动触发的那种）
 };
 
-// ---- Flash 布局：库只认「扇区表」，遍历算法在库里，移植时只填表 ----
-//
-// 为什么是表而不是函数：F4 的扇区不等长（16KB×4 + 64KB + 128KB×N），用算式推算
-// 既难读又难改；列成表以后每个扇区的地址一眼可查，也不用动逻辑。
+// ---- Flash 扇区表：芯片事实，移植时只填这张表 ----
+// 用表而不是算式：F4 的扇区不等长（16KB×4 + 64KB + 128KB×N），列成表地址一眼可查。
 struct FlashSector {
-    uint32_t base;   // 扇区起始地址
-    uint32_t size;   // 扇区大小
+    uint32_t base;
+    uint32_t size;
 };
 
-// 由 port 实现提供（示例见 bl_port_stm32f4.cpp）。下标 = 擦除时的扇区号。
+// 由 port 实现提供。下标 = 擦除时的扇区号。
 extern const FlashSector kFlashSectors[];
 extern const uint32_t    kFlashSectorCount;
 
-// 查表：返回包含 addr 的那个扇区；找不到（地址不在表内）返回 nullptr
-// 库与 port 共用这一份，避免各写一遍
+// 返回包含 addr 的扇区；不在表内返回 nullptr
 inline const FlashSector* flashSectorAt(uint32_t addr) noexcept
 {
     for (uint32_t i = 0U; i < kFlashSectorCount; ++i) {
@@ -49,16 +45,18 @@ inline const FlashSector* flashSectorAt(uint32_t addr) noexcept
     return nullptr;
 }
 
-// ---- Flash 擦写读 ----
-Status flashErase(uint32_t addr, uint32_t len) noexcept;   // 整扇区擦除（addr/len 已对齐）
+// ---- Flash ----
+Status flashErase(uint32_t addr, uint32_t len) noexcept;   // addr / len 必须按扇区对齐
 Status flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept;
 Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept;
 
-// ---- 串口（宿主已初始化好，本层只收发）----
-// uartRead 的 timeoutMs 是「总超时」（必须 > 0；0 会立刻超时返回），不是「每字节超时」
+// ---- 串口 ----
+// 宿主把 USART 配好（8N1、波特率），库自己开接收中断并从接收缓冲取字节。
+// uartRead 的 timeoutMs 是「总超时」（必须 > 0），不是「每字节超时」。
 Status uartRead(uint8_t* buf, uint32_t len, uint32_t timeoutMs, uint32_t* outRead) noexcept;
 Status uartWrite(const uint8_t* buf, uint32_t len) noexcept;
-void   uartFlushRx() noexcept;                            // 清空接收缓冲与溢出标志
+void   uartFlushRx() noexcept;      // 清接收缓冲与溢出标志，并使能接收中断
+void   uartRxIrqHandler() noexcept; // 在宿主的 USARTx_IRQHandler 里调用，不要同时调 HAL_UART_IRQHandler
 
 // ---- 时基 ----
 uint32_t tickMs() noexcept;
@@ -70,16 +68,12 @@ void     delayMs(uint32_t ms) noexcept;
 ResetCause resetCause() noexcept;
 
 // 上电时是否要求强制留在 IAP —— 按住硬件按钮上电 = 不进 APP。
-// 读一次引脚电平即可，没有时间窗，不拖慢正常启动。板子上没按钮的平台直接 return false;
-// ⚠️ 读之前必须确认该 GPIO 端口时钟已开（宿主 MX_GPIO_Init 负责把引脚配成输入 + 上拉）：
-//    时钟没开时读 IDR 恒为 0，会被误判成「按住」→ 每次上电都进 IAP、APP 起不来。
-//    故时钟没开应按「没按」处理：宁可按键失效，也不能让 APP 永远起不来。
+// 没有按钮的平台直接 return false。
+// ⚠️ 读之前必须确认该 GPIO 端口时钟已开：时钟没开时读 IDR 恒为 0，会被误判成「按住」，
+//    于是每次上电都进 IAP。故时钟没开一律按「没按」处理。
 bool bootPinHeld() noexcept;
 
-// 跳转到 APP。Cortex-M 上这八步顺序不能乱：
-//   关中断 → 停 SysTick → 复位 RCC → 清 NVIC
-//   → 设 SCB->VTOR → 设 MSP → 设 CONTROL=0 → 跳到入口
-// 正常不返回。（RISC-V 内核请查手册，向量表机制不同）
+// 跳转到 APP（Cortex-M 上的八步顺序见实现）。正常不返回。
 void jumpToApp(uint32_t appBase) noexcept;
 
 } // namespace bl

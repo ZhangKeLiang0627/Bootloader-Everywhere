@@ -399,9 +399,9 @@
               <FilePath>..\Bootloader\bl.cpp</FilePath>
             </File>
             <File>
-              <FileName>bl_protocol.cpp</FileName>
+              <FileName>protocol.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\Bootloader\bl_protocol.cpp</FilePath>
+              <FilePath>..\Bootloader\protocol.cpp</FilePath>
             </File>
             <File>
               <FileName>bl_port_stm32f4.cpp</FileName>

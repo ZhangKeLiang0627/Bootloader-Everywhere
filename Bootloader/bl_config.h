@@ -1,13 +1,10 @@
 #ifndef BL_CONFIG_H
 #define BL_CONFIG_H
 
-// Flash 分区。**换芯片只需要改 2 个数**（照数据手册填），其余都是派生值：
-//
+// Flash 分区。换芯片只改 2 个数（照数据手册填），其余都是派生值：
 //   STM32F401xE  512KB → BOOT 16KB | APP 496KB
 //   STM32F405/7  1MB   → BOOT 16KB | APP 1008KB
-//
 // APP 区必须落在扇区起点上：Flash 只能整扇区擦，差一个字节会连邻近区一起擦掉。
-// 上电还会用 flashSectorAt() 查扇区表精查一次（表由 port 提供）。
 #define BL_FLASH_BASE           0x08000000UL   // 架构常量，不配置：Flash 别名区（ARMv7-M 约定）
 
 #ifndef BL_FLASH_SIZE
@@ -30,27 +27,43 @@
 #error "APP 区不足 64KB：请减小 BL_BOOT_SIZE，或确认 BL_FLASH_SIZE"
 #endif
 
-// YMODEM 参数
-#ifndef BL_YMODEM_BLOCK_SIZE
-#define BL_YMODEM_BLOCK_SIZE    1024U                // 1K 模式；上位机不支持时自动退回 128
-#endif
-#ifndef BL_YMODEM_PACKET_TIMEOUT_MS
-#define BL_YMODEM_PACKET_TIMEOUT_MS 3000UL           // 单帧接收超时
-#endif
-#ifndef BL_YMODEM_HANDSHAKE_MS
-#define BL_YMODEM_HANDSHAKE_MS  15000UL              // 握手总超时，也是「APP 唤回窗口」长度
-#endif
-#ifndef BL_YMODEM_MAX_RETRY
-#define BL_YMODEM_MAX_RETRY     10U                  // 传输途中允许的连续超时次数
-#endif
-#ifndef BL_YMODEM_MAX_NAK
-#define BL_YMODEM_MAX_NAK       5U                   // 单帧内允许的连续 NAK 次数
+// ---- 升级协议 ----
+
+// 从机地址（载体帧第 2 字节）。单机场景用 0x01；多从机时每台一个地址。
+#ifndef BL_DEVICE_ID
+#define BL_DEVICE_ID            0x01U
 #endif
 
-// 调试输出。这是 ROM 占用最大的开关（开 ≈3.6KB、关 ≈0）。发布版可用
-// -DBL_DEBUG_LOG=0 量体积；不要改用 stdio，标准 vsnprintf 会连带浮点吃掉约 6.5KB。
+// 每帧携带的固件数据量。载体 Data 区上限 1024，减去 DATA 头部 14 字节 → 最大 1010。
+#ifndef BL_BLOCK_SIZE
+#define BL_BLOCK_SIZE           512U
+#endif
+
+// 单次 uartRead 的等待切片。决定空闲超时的检查间隔。
+#ifndef BL_READ_SLICE_MS
+#define BL_READ_SLICE_MS        20UL
+#endif
+
+// 升级途中（已 START）连续多久收不到有效帧就判定主机放弃，退回等 START
+#ifndef BL_IDLE_TIMEOUT_MS
+#define BL_IDLE_TIMEOUT_MS      30000UL
+#endif
+
+// 软件复位唤回窗口：APP 软复位后等上位机的时长；超时且未擦除过则跳回 APP
+#ifndef BL_RECALL_WINDOW_MS
+#define BL_RECALL_WINDOW_MS     15000UL
+#endif
+
+// 调试输出。ROM 占用最大的开关（开约 3.6KB、关约 0）。
+// 不要改用 stdio：标准 vsnprintf 会连带浮点吃掉约 6.5KB。
 #ifndef BL_DEBUG_LOG
 #define BL_DEBUG_LOG            1
+#endif
+
+// 传输期间是否仍打日志。默认关：日志与协议共用同一个串口，开着会污染上位机的接收流。
+// 排查协议问题时临时置 1。
+#ifndef BL_LOG_DURING_TRANSFER
+#define BL_LOG_DURING_TRANSFER  0
 #endif
 
 #if BL_DEBUG_LOG

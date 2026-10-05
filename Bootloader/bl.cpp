@@ -1,13 +1,14 @@
-// Bootloader-Everywhere 主体实现：日志、CRC32、向量表校验、升级会话、决策、入口。
-// YMODEM 协议层在 bl_protocol.cpp。
+// Bootloader-Everywhere 主体实现：日志、CRC32、向量表校验、IAP 会话、启动决策、入口。
 //
-// 只调 bl_port.h 声明的函数，不认识任何芯片厂商头文件 —— 这是它能跨芯片的原因。
+// 载体帧（0xA5 帧 + CRC8）在 protocol.cpp —— 那层与业务无关，可整对文件拿走复用。
+// 本文件只调 bl_port.h 声明的函数，不认识任何芯片厂商头文件。
 // 约束：C++11，无异常、无 RTTI、无动态内存。
 
 #include "bl.h"
 #include "bl_port.h"
 #include "bl_config.h"
-#include "bl_protocol.h"     // Ymodem / YmodemSink / Crc16
+#include "protocol.h"
+
 #include <cstdarg>
 #include <cstdint>
 #include <cstring>
@@ -16,7 +17,7 @@ namespace bl { [[noreturn]] void blEntry() noexcept; }
 
 namespace bl {
 
-// ① 日志：轻量串口输出（不依赖 stdio，省 ROM）
+// ------------------------------------------------------------------ 日志
 
 namespace log {
 
@@ -24,10 +25,11 @@ namespace {
 
 #if BL_DEBUG_LOG
 
-/* 行缓冲：攒满一行再一次性发出，避免逐字符调用串口带来的开销 */
 constexpr uint32_t kLineBufSize = 128U;
+
 char     gBuf[kLineBufSize];
-uint32_t gLen = 0;
+uint32_t gLen   = 0U;
+bool     gMuted = false;
 
 void flush() noexcept
 {
@@ -45,14 +47,13 @@ void put(char c) noexcept
     gBuf[gLen++] = c;
 }
 
-// 整数输出：只支持十进制与十六进制 + 可选补零宽度
-// （覆盖全库实际用到的 %lu / %08lX / %06lX / %d 四种写法）
+// 只支持十进制与十六进制 + 可选补零宽度，覆盖全库实际用到的四种写法
 void putNumber(uint32_t v, bool hex, uint32_t width, bool zeroPad) noexcept
 {
     const uint32_t base   = hex ? 16U : 10U;
     const char*    digits = hex ? "0123456789ABCDEF" : "0123456789";
     char     tmp[11];
-    uint32_t n = 0;
+    uint32_t n = 0U;
 
     if (v == 0U) {
         tmp[n++] = '0';
@@ -67,35 +68,44 @@ void putNumber(uint32_t v, bool hex, uint32_t width, bool zeroPad) noexcept
         put(zeroPad ? '0' : ' ');
     }
     while (n > 0U) {
-        put(tmp[--n]);          // 数字是逆序生成的，倒着吐出来
+        put(tmp[--n]);
     }
 }
 
-#endif /* BL_DEBUG_LOG */
+#endif // BL_DEBUG_LOG
 
 } // namespace
+
+// 传输期间关日志：日志与协议共用同一个串口，开着会污染上位机的接收流
+void mute(bool on) noexcept
+{
+#if BL_DEBUG_LOG && !BL_LOG_DURING_TRANSFER
+    gMuted = on;
+#else
+    (void)on;
+#endif
+}
 
 // 支持 %u %d %X %s %%，可带 0 与宽度修饰（如 %08lX）。不支持浮点。
 void printf(const char* fmt, ...) noexcept
 {
 #if BL_DEBUG_LOG
-    if (fmt == nullptr) {
+    if (fmt == nullptr || gMuted) {
         return;
     }
 
-    gLen = 0;
+    gLen = 0U;
 
     va_list ap;
     va_start(ap, fmt);
 
     for (const char* p = fmt; *p != '\0'; ++p) {
-
         if (*p != '%') {
             put(*p);
             continue;
         }
 
-        ++p;                                    // 跳过 '%'
+        ++p;                                        // 跳过 '%'
 
         bool zeroPad = false;
         if (*p == '0') {
@@ -103,7 +113,7 @@ void printf(const char* fmt, ...) noexcept
             ++p;
         }
 
-        uint32_t width = 0;
+        uint32_t width = 0U;
         while (*p >= '0' && *p <= '9') {
             width = width * 10U + static_cast<uint32_t>(*p - '0');
             ++p;
@@ -123,7 +133,7 @@ void printf(const char* fmt, ...) noexcept
                 v = -v;
             }
             putNumber(static_cast<uint32_t>(v), false, width, zeroPad);
-        } else if (*p == 'u') {
+        } else if (*p == 'u') {                     // %lu 依赖这一支，别删
             const uint32_t v = isLong ? static_cast<uint32_t>(va_arg(ap, unsigned long))
                                       : static_cast<uint32_t>(va_arg(ap, unsigned int));
             putNumber(v, false, width, zeroPad);
@@ -139,10 +149,10 @@ void printf(const char* fmt, ...) noexcept
         } else if (*p == '%') {
             put('%');
         } else if (*p == '\0') {
-            break;                              // 格式串以 '%' 结尾
+            break;
         } else {
-            put('%');
-            put(*p);                            // 未知转换符原样输出，便于发现写错的格式串
+            put('%');                               // 未知转换符原样输出，便于发现写错的格式串
+            put(*p);
         }
     }
 
@@ -155,75 +165,57 @@ void printf(const char* fmt, ...) noexcept
 
 } // namespace log
 
-// ② CRC32 —— 整镜像校验
+// ------------------------------------------------------------------ CRC32
 
-// CRC32 / ISO-HDLC —— 整镜像校验
+// 整镜像校验用 CRC32 / ISO-HDLC（poly 0x04C11DB7，反射 → 反向多项式 0xEDB88320）。
+// 与载体层的 CRC8 位序方向相反：这个 LSB-first，那个 MSB-first。
 class Crc32 {
 public:
     static constexpr uint32_t kInit  = 0xFFFFFFFFU;
-    static constexpr uint32_t kCheck = 0xCBF43926U;   ///< 标准自检值
+    static constexpr uint32_t kCheck = 0xCBF43926U;      // "123456789"
 
     constexpr Crc32() noexcept : value_(kInit) {}
 
-    /// 复位（同样不能标 constexpr，原因见 Crc16::reset）
+    // 不能标 constexpr：C++11 下 constexpr 成员函数隐含 const，改不了成员
     void reset() noexcept { value_ = kInit; }
 
-    /// 增量累加（value_ 保存的是未做最终异或的中间值）
     void update(const void* data, uint32_t len) noexcept;
 
-    /// 取最终结果（内部做最终异或）
+    // 取最终结果（内部做最后一次异或）
     constexpr uint32_t value() const noexcept { return value_ ^ 0xFFFFFFFFU; }
-
-    static uint32_t compute(const void* data, uint32_t len) noexcept
-    {
-        Crc32 c;
-        c.update(data, len);
-        return c.value();
-    }
 
 private:
     uint32_t value_;
 };
 
-/// 直接对 Flash 区域计算 CRC32（分块读，不占大缓冲）
-uint32_t crc32Flash(uint32_t addr, uint32_t len) noexcept;
-
-// 自检
-//
-// CRC 参数一旦写错，现象是「PC 算的值和板子算的对不上」，极难排查。
-// 上电时跑一次自检，能在最早时刻暴露问题。
-Status crcSelftest() noexcept;
-
-// CRC32 / ISO-HDLC（半字节查表）
-//
-// 表项为反向多项式 0xEDB88320 的 4 位查表，
-// 一次处理 4 bit，比纯逐位快约 4 倍，而表只占 64 字节。
 namespace {
+
+// 半字节查表：一次 4 bit，比逐位快约 4 倍，表只占 64 字节
 constexpr uint32_t kNibbleTable[16] = {
     0x00000000U, 0x1DB71064U, 0x3B6E20C8U, 0x26D930ACU,
     0x76DC4190U, 0x6B6B51F4U, 0x4DB26158U, 0x5005713CU,
     0xEDB88320U, 0xF00F9344U, 0xD6D6A3E8U, 0xCB61B38CU,
     0x9B64C2B0U, 0x86D3D2D4U, 0xA00AE278U, 0xBDBDF21CU,
 };
+
 } // namespace
 
 void Crc32::update(const void* data, uint32_t len) noexcept
 {
     const auto* p = static_cast<const uint8_t*>(data);
 
-    for (uint32_t i = 0; i < len; ++i) {
+    for (uint32_t i = 0U; i < len; ++i) {
         value_ ^= static_cast<uint32_t>(p[i]);
         value_ = (value_ >> 4) ^ kNibbleTable[value_ & 0x0FU];
         value_ = (value_ >> 4) ^ kNibbleTable[value_ & 0x0FU];
     }
 }
 
-// 直接对 Flash 区域算 CRC32
-uint32_t crc32Flash(uint32_t addr, uint32_t len) noexcept
+// 分块读 Flash 累加，不占大缓冲
+static bool crcOfFlash(uint32_t addr, uint32_t len, Crc32& crc) noexcept
 {
-    uint8_t buf[256];
-    Crc32   crc;
-    uint32_t done = 0;
+    uint8_t  buf[64];
+    uint32_t done = 0U;
 
     while (done < len) {
         uint32_t chunk = len - done;
@@ -231,56 +223,41 @@ uint32_t crc32Flash(uint32_t addr, uint32_t len) noexcept
             chunk = sizeof(buf);
         }
         if (!ok(flashRead(addr + done, buf, chunk))) {
-            /* 读失败时返回哨兵值，正常 CRC 结果不可能等于它 */
-            return 0xDEADBEEFU;
+            return false;
         }
         crc.update(buf, chunk);
         done += chunk;
     }
-    return crc.value();
+    return true;
 }
 
-// 自检
-Status crcSelftest() noexcept
+// 读失败返回哨兵值（正常 CRC 结果不可能等于它）
+static uint32_t crc32Flash(uint32_t addr, uint32_t len) noexcept
 {
-    static constexpr char kVector[] = "123456789";
-
-    if (Crc16::compute(kVector, 9) != Crc16::kCheck) {
-        return Status::CrcFail;
-    }
-    if (Crc32::compute(kVector, 9) != Crc32::kCheck) {
-        return Status::CrcFail;
-    }
-    return Status::Ok;
+    Crc32 crc;
+    return crcOfFlash(addr, len, crc) ? crc.value() : 0xDEADBEEFU;
 }
 
-// ③ 校验：向量表
-//
-// 向量表是否像个能跑的东西：SP 是 SRAM 里的合法栈顶、入口落在 APP 区内且为 Thumb 地址。
-// 两次 32 位读而已，却能挡住最常见的两类「坏固件」：
-//   - 空片：全 0xFF → SP=0xFFFFFFFF 不在 SRAM 区、PC 也不在 APP 区内
-//   - 擦到一半的扇区：向量表首字可能已被擦成 0xFF 或残值
-//
-// SP 的判据刻意只做「宽范围 + 8 字节对齐」，不要求知道 SRAM 容量：
-//   - 0x20000000 是 Cortex-M 的 SRAM 区基址（ARMv7-M 架构约定），不是芯片参数
-//   - 1MB 的宽度足够覆盖 F1/F4/GD32/CH32 全系；这里要的不是精确边界，
-//     只是「像不像一个栈顶」（非 0xFF、在 SRAM 区、按 AAPCS 8 字节对齐）
-//   - SRAM 不在此处的芯片（如 STM32H7 的 0x24000000）改下面两个常量即可
+// ------------------------------------------------------------------ 向量表校验
+
+// SP 只做「宽范围 + 8 字节对齐」，不需要知道 SRAM 容量：
+// 0x20000000 是 Cortex-M 的 SRAM 区基址（架构约定），1MB 宽覆盖 F1/F4/GD32/CH32；
+// 8 字节对齐是 AAPCS 对栈的硬要求。SRAM 不在此处的芯片（如 H7 的 0x24000000）改这两行。
 static bool vectorsSane(uint32_t sp, uint32_t pc) noexcept
 {
-    constexpr uint32_t kSramBase = 0x20000000U;   // SRAM 区基址（Cortex-M 架构约定）
-    constexpr uint32_t kSramSpan = 0x00100000U;   // 1MB 宽，覆盖 F1/F4/GD32/CH32
+    constexpr uint32_t kSramBase = 0x20000000U;
+    constexpr uint32_t kSramSpan = 0x00100000U;
 
     return (sp >= kSramBase) && (sp < (kSramBase + kSramSpan)) && ((sp & 7U) == 0U) &&
            (pc >= BL_APP_BASE) && (pc < BL_APP_END) && ((pc & 1U) != 0U);
 }
 
-// 上电时读 APP 区前两个字判断能不能启动。
-// 这是唯一的判据 —— 提交阶段把这两个字留到最后写，
-// 所以「它们合法」等价于「整份固件已完整写入并校验过」。
+// APP 区前两个字是否像个能跑的东西。这是唯一的启动判据：
+// 提交阶段把这两个字留到最后写，所以「它们合法」等价于「整份固件已完整写入并校验过」。
 static Status checkVectors(uint32_t appBase) noexcept
 {
-    uint32_t vec[2] = {0, 0};
+    uint32_t vec[2] = {0U, 0U};
+
     if (!ok(flashRead(appBase, vec, sizeof(vec)))) {
         return Status::FlashFail;
     }
@@ -293,82 +270,144 @@ static Status checkVectors(uint32_t appBase) noexcept
     return Status::Ok;
 }
 
-// ⑤ 升级会话：擦除 → 收 → 回读校验 → 提交
-
-enum class IapResult : uint8_t {
-    Idle    = 0,
-    Done    = 1,
-    Failed  = 2,
-    Aborted = 3,
-};
-
-// 提交点 = APP 区的前两个字（SP、PC）。
-// 接收时把这两个字扣在 RAM 里不写，等整片回读校验通过后才写回。
-// 于是任何时刻断电，这两个字要么还是擦除态 0xFF、要么只写了一半，
-// 上电的向量表检查都判它非法 → 留在 IAP 可重刷，绝不会跳进半截固件。
-// 这样一来就不需要任何「配置区 / 状态标志」了。
-class Session final : public YmodemSink {
-public:
-    struct Config {
-        uint32_t       appBase = BL_APP_BASE;
-        uint32_t       appSize = BL_APP_SIZE;
-        Ymodem::Config ymodem{};
-    };
-
-    struct Result {
-        IapResult outcome = IapResult::Idle;
-        uint32_t  fwSize  = 0;    // 首包声明的固件大小
-        uint32_t  fwCrc32 = 0;    // 写入区（前 8 字节之后）的 CRC32
-        uint32_t  written = 0;    // 实际写入 Flash 的字节数（含末包填充）
-        char      filename[Ymodem::kFilenameMax] = {0};
-        Status    error   = Status::Ok;
-        bool      erased  = false;    // 是否动过 Flash（决定超时后能不能直接跳回 APP）
-    };
-
-    // 构造函数把 *this 交给 Ymodem 保存为 YmodemSink 引用；Ymodem 构造期不调
-    // sink 的虚函数，所以此刻 vtable 未建立是安全的，receive() 时才发生绑定。
-    Session() noexcept : Session(Config{}) {}
-    explicit Session(const Config& cfg) noexcept
-        : cfg_(cfg), ymodem_(*this, cfg.ymodem) {}
-
-    Result run() noexcept;                      // 阻塞直到本次会话结束
-
-    // YmodemSink 实现
-    bool onFileStart(const char* filename, uint32_t size) noexcept override;
-    bool onFileData(uint32_t offset, const uint8_t* data, uint32_t len) noexcept override;
-    void onFileEnd(uint32_t total) noexcept override;
-
-private:
-    bool eraseRegion(uint32_t bytes) noexcept;  // 擦除覆盖到的所有扇区
-    bool verifyWritten() noexcept;              // 回读 [8,size) 与接收时算的 CRC 比对
-    bool commit() noexcept;                     // 写回扣住的 SP/PC —— 提交点
-
-    Config  cfg_;
-    Ymodem  ymodem_;
-
-    Result   result_;
-    Crc32    crc_;                              // 只覆盖 [8, size)
-    uint32_t declaredSize_ = 0;                 // 首包声明大小
-    uint32_t writeTotal_   = 0;                 // 实际写入总量（含填充）
-    uint8_t  entry_[8]     = {0};               // 扣住的 SP/PC
-    bool     entryHeld_    = false;
-    bool     accepted_     = false;
-};
-
-static uint32_t le32(const uint8_t* p) noexcept
+// 上电自检：CRC32 与载体帧都必须与上位机逐位一致，写错的话在最早时刻暴露
+static Status selfTest() noexcept
 {
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8)  |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
+    static constexpr char kVector[] = "123456789";
+
+    Crc32 crc;
+    crc.update(kVector, 9U);
+    if (crc.value() != Crc32::kCheck) {
+        return Status::CrcFail;
+    }
+
+    // 载体帧：A5 01 02 02 00 34 12 12 03（向量见 docs/PROTOCOL_DESIGN.md §0.6.6）
+    static constexpr uint8_t kExpect[] = {
+        0xA5U, 0x01U, 0x02U, 0x02U, 0x00U, 0x34U, 0x12U, 0x12U, 0x03U,
+    };
+    const uint8_t payload[2] = {0x34U, 0x12U};
+    uint8_t       buf[16];
+
+    const uint32_t n = proto::encode(0x01U, 0x02U, payload, 2U, buf, sizeof(buf));
+    if (n != sizeof(kExpect)) {
+        return Status::Protocol;
+    }
+    for (uint32_t i = 0U; i < n; ++i) {
+        if (buf[i] != kExpect[i]) {
+            return Status::Protocol;
+        }
+    }
+
+    proto::Parser parser;
+    proto::Frame  frame;
+    bool got = false;
+    for (uint32_t i = 0U; i < n; ++i) {
+        got = parser.feed(buf[i], frame);
+    }
+    if (!got || frame.id != 0x01U || frame.code() != 0x02U || frame.len != 2U ||
+        frame.data[0] != 0x34U || frame.data[1] != 0x12U) {
+        return Status::Protocol;
+    }
+    return Status::Ok;
 }
 
-// 按扇区擦除：查表拿每个扇区的起点和大小，适配 F4 这类「扇区大小不等」的 Flash。
-// 只擦到覆盖范围，不整片擦 —— 避免无谓的等待与寿命消耗。
-bool Session::eraseRegion(uint32_t bytes) noexcept
+// ------------------------------------------------------------------ IAP 命令
+
+enum class IapResult : uint8_t {
+    Idle   = 0,
+    Done   = 1,
+    Failed = 2,
+};
+
+namespace {
+
+// 命令码（CMD 的低 7 位，应答时或上 proto::kDirReply）
+constexpr uint8_t kCmdStart  = 0x01U;
+constexpr uint8_t kCmdData   = 0x02U;
+constexpr uint8_t kCmdEnd    = 0x03U;
+constexpr uint8_t kCmdStatus = 0x04U;
+
+// 应答码，与设计文档 §0.5.7 一致。
+// 0x01 / 0x02 由载体层静默丢弃（重同步失败、长度越界），从机不会主动上报。
+enum class Code : uint8_t {
+    Ok         = 0x00,
+    Crc8       = 0x01,
+    Len        = 0x02,
+    Addr       = 0x03,
+    UnknownCmd = 0x04,
+    Param      = 0x05,
+    State      = 0x06,
+    AddrGap    = 0x07,
+    CumCrc     = 0x08,
+    EraseFail  = 0x09,
+    WriteFail  = 0x0A,
+    VerifyFail = 0x0B,
+    Vectors    = 0x0C,
+    TotalCrc   = 0x0D,
+    Redundant  = 0x0E,
+    Readback   = 0x0F,
+};
+
+constexpr uint16_t kStartLen  = 16U;      // size4 + crc32_4 + sp4 + pc4
+constexpr uint16_t kDataHead  = 14U;      // addr4 + total2 + index2 + vlen2 + cumCrc32_4
+constexpr uint16_t kBlockSize = BL_BLOCK_SIZE;
+
+static_assert(kBlockSize > 0U && kBlockSize <= (proto::kDataMax - kDataHead),
+              "BL_BLOCK_SIZE 放不进载体 Data 区（上限 1024 - 14）");
+
+} // namespace
+
+// 一次升级会话：等 START → 逐帧收 → END 提交。
+// 状态与 Flash 的对应关系靠 nextAddr_ 唯一确定，任何失败都不推进它。
+class Session {
+public:
+    struct Result {
+        IapResult outcome = IapResult::Idle;
+        uint32_t  fwSize  = 0U;
+        uint32_t  fwCrc32 = 0U;
+        Status    error   = Status::Ok;
+        bool      erased  = false;      // 本次是否动过 Flash（决定能不能直接跳回 APP）
+    };
+
+    // 返回即本次会话结束。waitStartMs 是等第一帧的超时；0 表示无限等。
+    Result run(uint32_t waitStartMs) noexcept;
+
+private:
+    enum class State : uint8_t { Idle, Receiving };
+
+    bool readFrame(uint32_t timeoutMs) noexcept;
+    void handle(const proto::Frame& f) noexcept;
+    void onStart(const proto::Frame& f) noexcept;
+    void onData(const proto::Frame& f) noexcept;
+    void onEnd() noexcept;
+    void onStatus() noexcept;
+
+    void reply(uint8_t cmd, uint8_t code, const void* body, uint16_t bodyLen) noexcept;
+    void replyCode(uint8_t cmd, uint8_t code) noexcept;
+    void replyData(uint8_t code) noexcept;
+
+    State         state_ = State::Idle;
+    proto::Parser parser_;
+    proto::Frame  frame_;
+    uint8_t       tx_[32];
+    uint8_t       lastReply_[24];
+    uint16_t      lastReplyLen_ = 0U;
+
+    uint32_t declaredSize_ = 0U;     // START 声明的镜像大小
+    uint32_t declaredCrc_  = 0U;     // START 声明的整镜像 CRC32
+    uint32_t nextAddr_     = 0U;     // 期望的下一个写入地址
+    uint16_t totalPkts_    = 0U;
+    Crc32    crc_;                   // 只覆盖 [appBase+8, nextAddr_)，且只由「读回 Flash」推进
+    uint8_t  entry_[8]     = {0U};   // START 带来的 SP / PC
+    bool     erased_       = false;
+    bool     done_         = false;
+    Result   result_;
+};
+
+// 按扇区擦除 [from, end)。from 必须是扇区起点（分区布局已保证）。
+static bool eraseRegion(uint32_t from, uint32_t end) noexcept
 {
-    uint32_t addr = cfg_.appBase;
-    const uint32_t end = cfg_.appBase + bytes;
+    uint32_t addr = from;
 
     while (addr < end) {
         const FlashSector* s = flashSectorAt(addr);
@@ -382,265 +421,336 @@ bool Session::eraseRegion(uint32_t bytes) noexcept
     return true;
 }
 
-bool Session::onFileStart(const char* filename, uint32_t size) noexcept
+bool Session::readFrame(uint32_t timeoutMs) noexcept
 {
-    accepted_  = false;
-    entryHeld_ = false;
+    const uint32_t start = tickMs();
 
-    if (size < 8U || size > cfg_.appSize) {
-        BL_LOG("[session] reject: size=%lu (app area=%lu)\r\n",
-               static_cast<unsigned long>(size),
-               static_cast<unsigned long>(cfg_.appSize));
-        return false;
+    for (;;) {
+        uint8_t  b   = 0U;
+        uint32_t got = 0U;
+        const Status st = uartRead(&b, 1U, BL_READ_SLICE_MS, &got);
+
+        if (got == 1U && parser_.feed(b, frame_)) {
+            return true;
+        }
+        if (st != Status::Ok && st != Status::Timeout) {
+            return false;
+        }
+        if (timeoutMs != 0U && (tickMs() - start) >= timeoutMs) {
+            return false;                           // 自上一帧起静默超时
+        }
+    }
+}
+
+void Session::reply(uint8_t cmd, uint8_t code, const void* body, uint16_t bodyLen) noexcept
+{
+    uint8_t pay[16];
+
+    pay[0] = code;
+    if (bodyLen > 0U && body != nullptr) {
+        std::memcpy(&pay[1], body, bodyLen);
     }
 
-    // 实际写入量按 YMODEM 包长向上取整：末包不足时发送方会填充，
-    // 这些填充字节同样会写进 Flash。
-    const uint32_t writeLen =
-        ((size + Ymodem::kBlockMax - 1U) / Ymodem::kBlockMax) * Ymodem::kBlockMax;
+    const uint32_t n = proto::encode(BL_DEVICE_ID,
+                                     static_cast<uint8_t>(cmd | proto::kDirReply),
+                                     pay, static_cast<uint16_t>(1U + bodyLen),
+                                     tx_, sizeof(tx_));
+    if (n == 0U) {
+        return;
+    }
+    (void)uartWrite(tx_, n);
 
-    BL_LOG("[session] file=%s size=%lu\r\n",
-           filename, static_cast<unsigned long>(size));
+    if (n <= sizeof(lastReply_)) {              // 留一份用于幂等重发
+        std::memcpy(lastReply_, tx_, n);
+        lastReplyLen_ = static_cast<uint16_t>(n);
+    }
+}
 
-    // 擦除即等于「作废现有固件」：擦完 SP/PC 变 0xFF，上电自然停在 IAP。
-    if (!eraseRegion(writeLen)) {
-        return false;
+void Session::replyCode(uint8_t cmd, uint8_t code) noexcept
+{
+    reply(cmd, code, nullptr, 0U);
+}
+
+// 数据应答：把从机侧的累积 CRC32 与期望地址交给主机比对
+void Session::replyData(uint8_t code) noexcept
+{
+    uint8_t body[8];
+
+    proto::putLe32(&body[0], crc_.value());
+    proto::putLe32(&body[4], nextAddr_);
+    reply(kCmdData, code, body, 8U);
+}
+
+void Session::onStart(const proto::Frame& f) noexcept
+{
+    if (f.len < kStartLen) {
+        replyCode(kCmdStart, static_cast<uint8_t>(Code::Param));
+        return;
     }
 
+    const uint32_t size  = proto::getLe32(&f.data[0]);
+    const uint32_t crc32 = proto::getLe32(&f.data[4]);
+    const uint32_t sp    = proto::getLe32(&f.data[8]);
+    const uint32_t pc    = proto::getLe32(&f.data[12]);
+
+    if (size < 16U || size > BL_APP_SIZE) {
+        replyCode(kCmdStart, static_cast<uint8_t>(Code::Param));
+        return;
+    }
+    if (!vectorsSane(sp, pc)) {
+        replyCode(kCmdStart, static_cast<uint8_t>(Code::Vectors));
+        return;
+    }
+
+    // 擦除即等于作废现有固件：APP 区前两个字变 0xFF，上电自然停在 IAP
+    if (!eraseRegion(BL_APP_BASE, BL_APP_BASE + size)) {
+        replyCode(kCmdStart, static_cast<uint8_t>(Code::EraseFail));
+        return;
+    }
+
+    proto::putLe32(&entry_[0], sp);
+    proto::putLe32(&entry_[4], pc);
     declaredSize_ = size;
-    writeTotal_   = 0;
+    declaredCrc_  = crc32;
+    nextAddr_     = BL_APP_BASE + 8U;           // SP/PC 由 START 带来，数据流从 +8 开始
+    totalPkts_    = static_cast<uint16_t>((size - 8U + (kBlockSize - 1U)) / kBlockSize);
     crc_.reset();
-    accepted_     = true;
+    erased_ = true;
+    state_  = State::Receiving;
 
-    result_.fwSize = size;
-    result_.erased = true;
-    for (uint32_t i = 0; i < Ymodem::kFilenameMax; ++i) {
-        result_.filename[i] = filename[i];
-        if (filename[i] == '\0') {
+    uint8_t body[2];
+    proto::putLe16(&body[0], kBlockSize);
+    reply(kCmdStart, static_cast<uint8_t>(Code::Ok), body, 2U);
+}
+
+void Session::onData(const proto::Frame& f) noexcept
+{
+    if (state_ != State::Receiving) {
+        replyCode(kCmdData, static_cast<uint8_t>(Code::State));
+        return;
+    }
+    if (f.len < kDataHead) {
+        replyCode(kCmdData, static_cast<uint8_t>(Code::Param));
+        return;
+    }
+
+    const uint8_t* p  = f.data;
+    const uint32_t addr  = proto::getLe32(&p[0]);
+    const uint16_t total = proto::getLe16(&p[4]);
+    const uint16_t index = proto::getLe16(&p[6]);
+    const uint16_t vlen  = proto::getLe16(&p[8]);
+    const uint32_t cum   = proto::getLe32(&p[10]);
+    const uint8_t* payload = p + kDataHead;
+
+    // 冗余字段交叉校验：任何一条不符即拒绝，绝不「挑一个相信」
+    if (vlen != static_cast<uint16_t>(f.len - kDataHead) ||
+        vlen == 0U || vlen > kBlockSize || total != totalPkts_) {
+        replyCode(kCmdData, static_cast<uint8_t>(Code::Redundant));
+        return;
+    }
+
+    if (addr < nextAddr_) {                     // 重复帧（上次应答丢了）：不重写，重发上次应答
+        if (lastReplyLen_ > 0U) {
+            (void)uartWrite(lastReply_, lastReplyLen_);
+        }
+        return;
+    }
+    if (addr != nextAddr_) {                    // 跳号：告诉主机从哪里续发
+        uint8_t body[4];
+        proto::putLe32(&body[0], nextAddr_);
+        reply(kCmdData, static_cast<uint8_t>(Code::AddrGap), body, 4U);
+        return;
+    }
+    if (index != static_cast<uint16_t>((addr - BL_APP_BASE - 8U) / kBlockSize)) {
+        replyCode(kCmdData, static_cast<uint8_t>(Code::Redundant));
+        return;
+    }
+    if ((addr + vlen) > (BL_APP_BASE + declaredSize_)) {
+        replyCode(kCmdData, static_cast<uint8_t>(Code::Addr));
+        return;
+    }
+
+    // 规则一：先校验、后写入。Flash 只能 1→0，先写坏数据就要整扇区擦除才能纠正。
+    // 前面每一帧都已验证过，所以一旦不符，错的一定是本帧。
+    Crc32 candidate = crc_;
+    candidate.update(payload, vlen);
+    if (candidate.value() != cum) {
+        replyData(static_cast<uint8_t>(Code::CumCrc));
+        return;
+    }
+
+    if (!ok(flashWrite(addr, payload, vlen))) {
+        replyCode(kCmdData, static_cast<uint8_t>(Code::WriteFail));
+        return;
+    }
+
+    // 规则四：读回 Flash 重算。只对「收到的字节」累加是没意义的 —— 那是同一串字节
+    // 在两端各算一次，必然相同；读回才算认证了真正落盘的内容（顺带覆盖 CRC8 漏检
+    // 与 Flash 静默写失败两类问题）。
+    Crc32 written = crc_;
+    if (!crcOfFlash(addr, vlen, written) || written.value() != candidate.value()) {
+        replyData(static_cast<uint8_t>(Code::Readback));
+        return;                                 // crc_ 未推进 → 主机重传可重写
+    }
+
+    crc_      = written;
+    nextAddr_ = addr + vlen;
+    replyData(static_cast<uint8_t>(Code::Ok));
+}
+
+void Session::onEnd() noexcept
+{
+    if (state_ != State::Receiving) {
+        replyCode(kCmdEnd, static_cast<uint8_t>(Code::State));
+        return;
+    }
+    if (crc_.value() != declaredCrc_) {         // 逐帧累积值与 START 声明的比对
+        replyCode(kCmdEnd, static_cast<uint8_t>(Code::TotalCrc));
+        return;
+    }
+    if (crc32Flash(BL_APP_BASE + 8U, declaredSize_ - 8U) != declaredCrc_) {
+        replyCode(kCmdEnd, static_cast<uint8_t>(Code::VerifyFail));
+        return;
+    }
+
+    // 提交：写回 SP/PC。过了这里固件才可启动（这是唯一会写 APP 区前 8 字节的地方）。
+    if (!ok(flashWrite(BL_APP_BASE, entry_, sizeof(entry_)))) {
+        replyCode(kCmdEnd, static_cast<uint8_t>(Code::WriteFail));
+        return;
+    }
+
+    uint8_t body[4];
+    proto::putLe32(&body[0], declaredSize_);
+    reply(kCmdEnd, static_cast<uint8_t>(Code::Ok), body, 4U);
+
+    result_.fwSize  = declaredSize_;
+    result_.fwCrc32 = declaredCrc_;
+    done_           = true;
+}
+
+// 仅用于异常恢复：从机复位后主机重新对表
+void Session::onStatus() noexcept
+{
+    const bool recv = (state_ == State::Receiving);
+    uint8_t body[8];
+
+    proto::putLe32(&body[0], recv ? (nextAddr_ - BL_APP_BASE - 8U) : 0U);
+    proto::putLe32(&body[4], recv ? nextAddr_ : 0U);
+    reply(kCmdStatus, static_cast<uint8_t>(Code::Ok), body, 8U);
+}
+
+void Session::handle(const proto::Frame& f) noexcept
+{
+    if (f.isReply()) {
+        return;                                 // 从机不会收到应答帧
+    }
+    if (f.id != BL_DEVICE_ID) {
+        return;                                 // 不是给本机的：静默丢弃，连错误也不回
+    }
+
+    switch (f.code()) {
+    case kCmdStart:  onStart(f);  break;
+    case kCmdData:   onData(f);   break;
+    case kCmdEnd:    onEnd();     break;
+    case kCmdStatus: onStatus();  break;
+    default:
+        replyCode(static_cast<uint8_t>(f.code()), static_cast<uint8_t>(Code::UnknownCmd));
+        break;
+    }
+}
+
+Session::Result Session::run(uint32_t waitStartMs) noexcept
+{
+    result_     = Result{};
+    state_      = State::Idle;
+    erased_     = false;
+    done_       = false;
+    lastReplyLen_ = 0U;
+    crc_.reset();
+    parser_.reset();
+    uartFlushRx();                              // 清接收路径并打开接收中断
+
+    log::mute(true);
+
+    for (;;) {
+        const uint32_t waitMs = (state_ == State::Receiving) ? BL_IDLE_TIMEOUT_MS : waitStartMs;
+
+        if (!readFrame(waitMs)) {
+            result_.outcome = IapResult::Failed;
+            result_.error   = Status::Timeout;
+            if (state_ == State::Receiving) {
+                BL_LOG("[session] idle timeout, back to idle\r\n");
+                state_ = State::Idle;
+            }
+            break;
+        }
+
+        handle(frame_);
+        if (done_) {
+            result_.outcome = IapResult::Done;
             break;
         }
     }
-    return true;
-}
 
-bool Session::onFileData(uint32_t offset, const uint8_t* data, uint32_t len) noexcept
-{
-    if (!accepted_ || data == nullptr || len == 0U) {
-        return false;
-    }
-    if (offset + len > cfg_.appSize) {
-        BL_LOG("[session] write overflow at off=%lu len=%lu\r\n",
-               static_cast<unsigned long>(offset),
-               static_cast<unsigned long>(len));
-        return false;
-    }
-
-    uint32_t skipped = 0;
-    if (offset == 0U) {
-        // 开头这 8 个字节扣在 RAM 里，留到提交时再写
-        const uint32_t hold = (len < 8U) ? len : 8U;
-        for (uint32_t i = 0; i < hold; ++i) {
-            entry_[i] = data[i];
-        }
-        entryHeld_ = (hold == 8U);
-        skipped    = hold;
-    }
-
-    const uint32_t writeLen = len - skipped;
-    if (writeLen > 0U &&
-        !ok(flashWrite(cfg_.appBase + offset + skipped, data + skipped, writeLen))) {
-        BL_LOG("[session] flash write failed at off=%lu\r\n",
-               static_cast<unsigned long>(offset + skipped));
-        return false;
-    }
-
-    // CRC 只覆盖原始长度里的 [8, size) —— 正好是「写进 Flash 的那部分」。
-    // 提交前回读同一区间重算比对，就能确认 Flash 真的写对了。
-    const uint32_t crcOff = offset + skipped;
-    if (crcOff < declaredSize_) {
-        const uint32_t remain = declaredSize_ - crcOff;
-        const uint32_t crcLen = (writeLen < remain) ? writeLen : remain;
-        if (crcLen > 0U) {
-            crc_.update(data + skipped, crcLen);
-        }
-    }
-
-    writeTotal_ = offset + len;
-    return true;
-}
-
-void Session::onFileEnd(uint32_t total) noexcept
-{
-    result_.written = (total > writeTotal_) ? total : writeTotal_;
-
-    BL_LOG("[session] received %lu bytes, crc32=0x%08lX\r\n",
-           static_cast<unsigned long>(result_.written),
-           static_cast<unsigned long>(crc_.value()));
-}
-
-bool Session::verifyWritten() noexcept
-{
-    if (declaredSize_ <= 8U) {
-        return true;
-    }
-    const uint32_t actual = crc32Flash(cfg_.appBase + 8U, declaredSize_ - 8U);
-    if (actual != crc_.value()) {
-        BL_LOG("[session] readback mismatch: rx=0x%08lX flash=0x%08lX\r\n",
-               static_cast<unsigned long>(crc_.value()),
-               static_cast<unsigned long>(actual));
-        return false;
-    }
-    return true;
-}
-
-bool Session::commit() noexcept
-{
-    if (!ok(flashWrite(cfg_.appBase, entry_, sizeof(entry_)))) {
-        BL_LOG("[session] commit failed\r\n");
-        return false;
-    }
-    return true;
-}
-
-Session::Result Session::run() noexcept
-{
-    result_ = Result{};
-
-    const Ymodem::Outcome out = ymodem_.receive();
-
-    if (!ok(out.status)) {
-        // 失败退出：SP/PC 没被写过，固件区自然「不可启动」，上电停在 IAP 可重刷
-        result_.outcome = (out.status == Status::Cancelled)
-                              ? IapResult::Aborted
-                              : IapResult::Failed;
-        result_.error   = out.status;
-        BL_LOG("[session] aborted: status=%d, received=%lu\r\n",
-               static_cast<int>(out.status),
-               static_cast<unsigned long>(out.stats.received));
-        return result_;
-    }
-
-    if (!accepted_) {
-        result_.outcome = IapResult::Idle;
-        return result_;
-    }
-    if (!entryHeld_) {
-        result_.outcome = IapResult::Failed;
-        result_.error   = Status::Protocol;
-        BL_LOG("[session] bad first block\r\n");
-        return result_;
-    }
-    if (out.stats.received < declaredSize_) {
-        result_.outcome = IapResult::Failed;
-        result_.error   = Status::Protocol;
-        BL_LOG("[session] short file: got %lu want %lu\r\n",
-               static_cast<unsigned long>(out.stats.received),
-               static_cast<unsigned long>(declaredSize_));
-        return result_;
-    }
-
-    // ① 回读校验：先确认 Flash 里真的写对了，再谈提交
-    if (!verifyWritten()) {
-        result_.outcome = IapResult::Failed;
-        result_.error   = Status::FlashFail;
-        return result_;
-    }
-
-    // ② 待写入的向量表本身得像样
-    if (!vectorsSane(le32(entry_), le32(entry_ + 4U))) {
-        result_.outcome = IapResult::Failed;
-        result_.error   = Status::CrcFail;
-        BL_LOG("[session] bad vectors in file\r\n");
-        return result_;
-    }
-
-    // ③ 写回 SP/PC —— 提交点，过了这里固件才可启动
-    if (!commit()) {
-        result_.outcome = IapResult::Failed;
-        result_.error   = Status::FlashFail;
-        return result_;
-    }
-
-    result_.fwCrc32 = crc_.value();
-    result_.outcome = IapResult::Done;
-
-    BL_LOG("[session] done: size=%lu crc=0x%08lX\r\n",
-           static_cast<unsigned long>(result_.fwSize),
-           static_cast<unsigned long>(result_.fwCrc32));
+    log::mute(false);
+    result_.erased = erased_;
     return result_;
 }
 
-// ⑥ 启动决策：跳 APP 还是留在 IAP
+// ------------------------------------------------------------------ 启动决策
 
 class Boot {
 public:
     enum class Action : uint8_t {
-        JumpToApp,     ///< 跳转应用
-        EnterIap,      ///< 留在 IAP 等待升级（无限等待）
-        EnterIapTimed, ///< 软件复位唤回的限时窗口：等上位机，超时跳回 APP
-    };
-
-    struct Config {
-        uint32_t appBase = BL_APP_BASE;
+        JumpToApp,
+        EnterIap,          // 留在 IAP 无限等
+        EnterIapTimed,     // 软件复位唤回的限时窗口
     };
 
     struct Decision {
-        Action      action = Action::EnterIap;
-        const char* reason = "";
+        Action      action;
+        const char* reason;
 
         Decision() = default;
         constexpr Decision(Action a, const char* r) noexcept : action(a), reason(r) {}
     };
 
     static Decision decide() noexcept;
-    static Decision decide(const Config& cfg) noexcept;
-
-    /// 跳转到 APP（内部调用 port 层，正常不返回）
-    static void jump(uint32_t appBase) noexcept;
+    static void     jump(uint32_t appBase) noexcept;
 };
 
-// ⑥ 启动决策：跳 APP 还是留在 IAP
-
 Boot::Decision Boot::decide() noexcept
-{
-    return decide(Config{});
-}
-
-Boot::Decision Boot::decide(const Config& cfg) noexcept
 {
     // 复位原因必须每次启动都读（read-and-clear），否则旧标志会累积到下次启动
     const ResetCause cause = resetCause();
     BL_LOG("[boot] reset cause = %lu\r\n", static_cast<unsigned long>(cause));
 
-    // 1. 按住硬件按钮上电 → 强制留在 IAP。
-    //    人在板子旁边、意图明确，所以是无限等（握手超时后本循环会重新握手，不会跳走）。
+    // 按住硬件按钮上电：人就在板子旁边，意图明确 → 无限等
     if (bootPinHeld()) {
         return { Action::EnterIap, "boot pin held" };
     }
 
-    // 2. 向量表非法 → 没有可启动的固件（空片 / 传输中途掉电），留在 IAP
-    if (!ok(checkVectors(cfg.appBase))) {
+    // 向量表非法 → 没有可启动的固件（空片 / 传输中途掉电）
+    if (!ok(checkVectors(BL_APP_BASE))) {
         return { Action::EnterIap, "no bootable firmware" };
     }
 
-    // 3. 软件复位 → 进限时升级窗口（APP 唤回通道）
+    // 软件复位 → APP 在唤回，进限时窗口
     if (cause == ResetCause::Software) {
-        return { Action::EnterIapTimed, "soft reset -> upgrade window" };
+        return { Action::EnterIapTimed, "soft reset -> recall window" };
     }
 
-    // 4. 可以跳了
     return { Action::JumpToApp, "ok" };
 }
 
 void Boot::jump(uint32_t appBase) noexcept
 {
-    BL_LOG("[boot] jumping to app @ 0x%08lX\r\n",
-           static_cast<unsigned long>(appBase));
+    BL_LOG("[boot] jumping to app @ 0x%08lX\r\n", static_cast<unsigned long>(appBase));
     jumpToApp(appBase);
     BL_LOG("[boot] jump failed!\r\n");
 }
 
-// ⑦ 入口
+// ------------------------------------------------------------------ 入口
 
 namespace {
 
@@ -657,11 +767,10 @@ const char* actionName(Boot::Action a) noexcept
 const char* outcomeName(IapResult r) noexcept
 {
     switch (r) {
-        case IapResult::Idle:    return "IDLE";
-        case IapResult::Done:    return "DONE";
-        case IapResult::Failed:  return "FAILED";
-        case IapResult::Aborted: return "ABORTED";
-        default:                 return "?";
+        case IapResult::Idle:   return "IDLE";
+        case IapResult::Done:   return "DONE";
+        case IapResult::Failed: return "FAILED";
+        default:                return "?";
     }
 }
 
@@ -670,7 +779,8 @@ const char* outcomeName(IapResult r) noexcept
 {
     for (;;) {
         BL_LOG("[main] FATAL: %s\r\n", why);
-        for (volatile uint32_t i = 0; i < 8000000U; ++i) {}
+        for (volatile uint32_t i = 0U; i < 8000000U; ++i) {
+        }
     }
 }
 
@@ -689,8 +799,12 @@ bool partitionAligned(const char* name, uint32_t base) noexcept
 bool layoutCheck() noexcept
 {
     bool all = true;
-    if (!partitionAligned("BOOT", BL_BOOT_BASE)) all = false;
-    if (!partitionAligned("APP",  BL_APP_BASE))  all = false;
+    if (!partitionAligned("BOOT", BL_BOOT_BASE)) {
+        all = false;
+    }
+    if (!partitionAligned("APP", BL_APP_BASE)) {
+        all = false;
+    }
     return all;
 }
 
@@ -699,8 +813,8 @@ bool layoutCheck() noexcept
 [[noreturn]] void blEntry() noexcept
 {
     // 芯片已由宿主初始化好（时钟 / 串口 / Flash 接口时钟），这里只做自检
-    if (!ok(crcSelftest())) {
-        fatal("crc selftest failed");
+    if (!ok(selfTest())) {
+        fatal("selftest failed");
     }
 
     BL_LOG("\r\n== Bootloader-Everywhere == flash %lu KB, app 0x%08lX + %lu KB\r\n",
@@ -719,33 +833,36 @@ bool layoutCheck() noexcept
         Boot::jump(BL_APP_BASE);
     }
 
-    // 软件复位唤回的限时窗口：窗口内没等到首包（也就没动过 Flash）就跳回 APP
-    bool timedWindow = (decision.action == Boot::Action::EnterIapTimed);
+    const bool timedWindow = (decision.action == Boot::Action::EnterIapTimed);
+    bool       everErased  = false;
+
+    static Session session;                     // 缓冲较大，放 .bss 不占栈
 
     for (;;) {
-        BL_LOG("[main] waiting for YMODEM transfer...\r\n");
+        // 一旦擦除过，固件区已不可启动 —— 此后不能再跳 APP，只能无限等下一次 START
+        const uint32_t waitMs =
+            everErased ? 0U : (timedWindow ? BL_RECALL_WINDOW_MS : 0U);
 
-        Session session;
-        const Session::Result r = session.run();
+        const Session::Result r = session.run(waitMs);
+        everErased = everErased || r.erased;
 
-        BL_LOG("[main] outcome=%s size=%lu file=%s\r\n",
+        BL_LOG("[main] outcome=%s size=%lu\r\n",
                outcomeName(r.outcome),
-               static_cast<unsigned long>(r.fwSize),
-               r.filename);
+               static_cast<unsigned long>(r.fwSize));
 
         if (r.outcome == IapResult::Done) {
-            delayMs(200);                       // 让最后几行日志发完
+            BL_LOG("[main] download done, jumping to app\r\n");
+            delayMs(50);                        // 应答已在 uartWrite 里等到 TC，这里只是余量
             Boot::jump(BL_APP_BASE);
         }
 
-        if (timedWindow && r.outcome == IapResult::Failed &&
-            r.error == Status::Timeout && !r.erased) {
-            BL_LOG("[main] window timeout, jumping to app\r\n");
+        // 唤回窗口内没人来，且没动过 Flash → 跳回 APP
+        if (!everErased && r.error == Status::Timeout) {
+            BL_LOG("[main] no host, jumping to app\r\n");
             Boot::jump(BL_APP_BASE);
-            timedWindow = false;
         }
 
-        delayMs(200);
+        delayMs(20);
     }
 }
 
@@ -755,4 +872,9 @@ bool layoutCheck() noexcept
 extern "C" void blRun(void)
 {
     bl::blEntry();
+}
+
+extern "C" void blUartRx(void)
+{
+    bl::uartRxIrqHandler();
 }
