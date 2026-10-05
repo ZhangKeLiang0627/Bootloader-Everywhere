@@ -1,4 +1,4 @@
-// LUMOS-bootloader 全部实现（单文件库）。
+// Bootloader-Everywhere 全部实现（单文件库）。
 // 只调 bl_port.h 声明的函数，不认识任何芯片厂商头文件 —— 这是它能跨芯片的原因。
 // 约束：C++11，无异常、无 RTTI、无动态内存。
 
@@ -1171,7 +1171,7 @@ bool layoutCheck() noexcept
         fatal("crc selftest failed");
     }
 
-    BL_LOG("\r\n== LUMOS-bootloader == flash %lu KB, app 0x%08lX + %lu KB\r\n",
+    BL_LOG("\r\n== Bootloader-Everywhere == flash %lu KB, app 0x%08lX + %lu KB\r\n",
            static_cast<unsigned long>(BL_FLASH_SIZE / 1024U),
            static_cast<unsigned long>(BL_APP_BASE),
            static_cast<unsigned long>(BL_APP_SIZE / 1024U));

@@ -175,8 +175,8 @@ static void boot_btn_poll(void)
 
 | 做什么 | 命令 |
 |---|---|
-| 编译（改过源码时**必须**用这个） | `UV4 -r MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o build.log` |
-| 下载到板子 | `UV4 -f MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o flash.log` |
+| 编译（改过源码时**必须**用这个） | `UV4 -r MDK-ARM/Bootloader-Everywhere.uvprojx -j0 -o build.log` |
+| 下载到板子 | `UV4 -f MDK-ARM/Bootloader-Everywhere.uvprojx -j0 -o flash.log` |
 | 量 ROM（不开 Keil） | `python tools/build.py` |
 | 看板子串口 | `python tools/board.py monitor` |
 | 编测试固件（test-app 分支） | `python TestApp/build_app.py --fail 0` |

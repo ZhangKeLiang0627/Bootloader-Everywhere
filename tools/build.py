@@ -1,5 +1,5 @@
 """
-LUMOS-bootloader 命令行构建 / ROM 测量 / 固件导出
+Bootloader-Everywhere 命令行构建 / ROM 测量 / 固件导出
 
 不打开 uVision 就能：
   - 编译 + 链接整份 Bootloader，量出真实 ROM 占用（是否装得进 16KB）
@@ -26,7 +26,7 @@ import tempfile
 # 路径推导：脚本位于 <repo>/Bootloader/tools/ 下
 # ---------------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)                       # .../LUMOS-bootloader —— 宿主工程根
+ROOT = os.path.dirname(HERE)                       # .../Bootloader-Everywhere —— 宿主工程根
 PROJ = os.path.join(ROOT, 'Bootloader')            # .../Bootloader —— 库根目录
 
 KEIL = os.environ.get(
@@ -231,7 +231,7 @@ def build_one(chip: str, opt: str, defines: list, region=BOOT_REGION,
 
 
 def main():
-    ap = argparse.ArgumentParser(description='LUMOS-bootloader 构建 / ROM 测量')
+    ap = argparse.ArgumentParser(description='Bootloader-Everywhere 构建 / ROM 测量')
     ap.add_argument('-c', '--chip', default='stm32f401xe', choices=sorted(CHIPS),
                     help='目标芯片档案（默认 stm32f401xe）')
     ap.add_argument('--opt', default='-Oz',
@@ -264,7 +264,7 @@ def main():
         return 0
 
     print('=' * 74)
-    print('LUMOS-bootloader 构建  chip=%s  opt=%s  log=%s'
+    print('Bootloader-Everywhere 构建  chip=%s  opt=%s  log=%s'
           % (args.chip, args.opt, 'off' if args.no_log else 'on'))
     print('=' * 74)
     ro = build_one(args.chip, args.opt, defines,

@@ -55,11 +55,11 @@ dkms.conf
 *.dwo
 .vscode
 
-MDK-ARM/LUMOS-bootloader
+MDK-ARM/Bootloader-Everywhere
 
-MDK-ARM/LUMOS-bootloader.uvguix.*
+MDK-ARM/Bootloader-Everywhere.uvguix.*
 
-# LUMOS-bootloader 命令行构建产物（tools/build.py 输出）
+# Bootloader-Everywhere 命令行构建产物（tools/build.py 输出）
 /build/
 *.bin
 

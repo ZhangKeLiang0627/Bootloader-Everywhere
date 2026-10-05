@@ -1,5 +1,5 @@
 """
-LUMOS-bootloader 板端调试工具（DAPLink / CMSIS-DAP + pyocd + pyserial）
+Bootloader-Everywhere 板端调试工具（DAPLink / CMSIS-DAP + pyocd + pyserial）
 
 把「备份、擦除、烧写、读回、看串口」这一串常用动作收在一处，
 方便按 docs/TEST_PLAN.md 反复跑（那个方案里有 18 次断电暴力测试，
@@ -323,7 +323,7 @@ def cmd_monitor(args):
 
 # ---------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description='LUMOS-bootloader 板端工具')
+    ap = argparse.ArgumentParser(description='Bootloader-Everywhere 板端工具')
     ap.add_argument('--target', default=DEFAULT_TARGET,
                     help='pyocd 目标名（默认 %s）' % DEFAULT_TARGET)
     sub = ap.add_subparsers(dest='cmd', required=True)

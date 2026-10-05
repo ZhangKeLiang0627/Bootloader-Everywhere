@@ -43,7 +43,7 @@ AGENTS.md          给接手的人 / AI 的完整说明
 USER.md            给使用者的快速上手
 
 —— 以下是 STM32F401 示例工程，不是库的一部分 ——
-Core/ Drivers/ MDK-ARM/ LUMOS-bootloader.ioc
+Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
                    CubeMX + Keil 工程（含宿主 main），演示"库怎么接进真实工程"
 build/             编译产物
 ```
