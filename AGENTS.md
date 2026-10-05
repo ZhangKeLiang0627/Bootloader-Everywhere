@@ -23,10 +23,12 @@
 ```
 README.md              入口导航（"从哪开始"）
 AGENTS.md / USER.md    给 AI / 给使用者
-Bootloader/            ★ 库本体，7 个源文件，0 子目录
+Bootloader/            ★ 库本体，9 个源文件，0 子目录
   README.md              库的唯一文档（提交机制 / 用法 / 移植 / 常见坑）
   bl.h                   对外头文件：blRun() + blUartRx() + Status（C 工程也能 include）
-  bl.cpp                 主体：日志 / CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+  bl.cpp                 主体：CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+  bl_log.h               日志：开关（BL_DEBUG_LOG / BL_LOG_DURING_TRANSFER）+ BL_LOG 宏
+  bl_log.cpp             日志实现：轻量格式化，不依赖 stdio，只调 uartWrite
   protocol.h             载体层：Frame / Parser / encode / crc8（与业务无关，可整对拷走）
   protocol.cpp           载体层实现：0xA5 帧编解码 + CRC8
   bl_port.h              移植契约（12 个函数 + 扇区表）

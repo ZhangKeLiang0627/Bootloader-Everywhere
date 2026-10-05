@@ -147,7 +147,7 @@ static void boot_btn_poll(void)
 
 | 工具 | 位置 | 用途 |
 |---|---|---|
-| **库本体（7 个源文件）** | `Bootloader/` | bl.h / bl.cpp / protocol.h / protocol.cpp / bl_port.h / bl_port_stm32f4.cpp / bl_config.h |
+| **库本体（9 个源文件）** | `Bootloader/` | bl.h / bl.cpp / bl_log.h / bl_log.cpp / protocol.h / protocol.cpp / bl_port.h / bl_port_stm32f4.cpp / bl_config.h |
 | 库文档（提交机制、用法、移植、坑） | `Bootloader/README.md` | 权威文档 |
 | 网页上位机 | `docs/`（web 分支） | 浏览器刷机，已上线 |
 | 命令行构建 | `tools/build.py` | 编译 + 量 ROM |

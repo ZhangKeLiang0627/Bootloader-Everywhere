@@ -1,4 +1,5 @@
 // Bootloader-Everywhere 唯一的对外头文件。用法见 README.md，移植接口见 bl_port.h。
+// （日志接口不在本文件：它只给库内部用，见 bl_log.h。）
 #ifndef BL_H
 #define BL_H
 
@@ -20,10 +21,6 @@ enum class Status : int32_t {
 };
 
 constexpr bool ok(Status s) noexcept { return s == Status::Ok; }
-
-namespace log {
-void printf(const char* fmt, ...) noexcept;   // 轻量格式化，只支持 %u %d %X %s %%
-} // namespace log
 
 } // namespace bl
 

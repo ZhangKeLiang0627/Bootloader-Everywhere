@@ -54,22 +54,7 @@
 #define BL_RECALL_WINDOW_MS     15000UL
 #endif
 
-// 调试输出。ROM 占用最大的开关（开约 3.6KB、关约 0）。
-// 不要改用 stdio：标准 vsnprintf 会连带浮点吃掉约 6.5KB。
-#ifndef BL_DEBUG_LOG
-#define BL_DEBUG_LOG            1
-#endif
-
-// 传输期间是否仍打日志。默认关：日志与协议共用同一个串口，开着会污染上位机的接收流。
-// 排查协议问题时临时置 1。
-#ifndef BL_LOG_DURING_TRANSFER
-#define BL_LOG_DURING_TRANSFER  0
-#endif
-
-#if BL_DEBUG_LOG
-    #define BL_LOG(...)         do { ::bl::log::printf(__VA_ARGS__); } while (0)
-#else
-    #define BL_LOG(...)         do { } while (0)
-#endif
+// 日志开关（BL_DEBUG_LOG / BL_LOG_DURING_TRANSFER）与 BL_LOG 宏在 bl_log.h，
+// 它们自带默认值，需要覆盖时在那里改或从编译选项 -D 传入。
 
 #endif /* BL_CONFIG_H */
