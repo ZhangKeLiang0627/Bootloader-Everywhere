@@ -27,7 +27,7 @@ Bootloader/            ★ 库本体，5 个文件，0 子目录
   README.md              库的唯一文档（提交机制 / 用法 / 移植 / 常见坑）
   bl.h                   对外头文件：blRun() + Status（C 工程也能 include）
   bl.cpp                 全部实现（日志/CRC/校验/YMODEM/会话/决策/入口）
-  bl_port.h              移植契约（12 个函数）
+  bl_port.h              移植契约（13 个函数）
   bl_port_stm32f4.cpp    STM32F4 实现（含板级配置：串口实例 / 引脚）
   bl_config.h            分区参数 + YMODEM 参数 + 日志开关
 tools/                 开发工具（不属于库）
@@ -63,13 +63,19 @@ PC 落在 APP 区内且最低位为 1）。由于这两个字是最后写的，
 > 并做「日志式槽位轮转」，里面有 `Meta` 类与 `kSlotMagic = 0x4C554D53 ("LUMS")`。
 > 用户问"为什么还要存魔术数"之后被这套机制取代。**不要把它加回来。**
 
-### 3.2 决策只有 3 步（`Boot::decide()`）
+### 3.2 决策 4 步（`Boot::decide()`）
 
 ```
-1. 向量表非法         → EnterIap   （空片 / 传输没提交，停在 IAP 可重刷）
-2. 复位原因 = 软件复位 → EnterIapTimed（15s 限时窗口，APP 唤回的通道）
-3. 其余               → JumpToApp   （零等待）
+1. 按住硬件按钮上电     → EnterIap     （无限等：人就在旁边，零等待）
+2. 向量表非法          → EnterIap     （空片 / 传输没提交，停在 IAP 可重刷）
+3. 复位原因 = 软件复位  → EnterIapTimed（15s 限时窗口，APP 唤回的通道）
+4. 其余                → JumpToApp     （零等待）
 ```
+
+**第 1 步是保留功能，和已删的「串口 backdoor」不是一回事**（见 §7）：它读的是
+「按住」的电平，不需要抢时间窗，也不拖慢正常启动。引脚/极性在
+`bl_port_stm32f4.cpp` 顶部四行宏里配；引脚本身由宿主配成「输入 + 上拉」
+（示例见 `Core/Src/main.c` 的 `bootPinInit()`）。板子上没按钮就把那四行注释掉。
 
 `resetCause()` 必须每次启动都读（read-and-clear）；实现里 **`SFTRSTF` 优先级高于
 `POR/PIN`** —— 在线探针连着时软件复位会连带把 NRST 拉一下，两者同时置位。
@@ -135,13 +141,14 @@ T4 窗口超时跳回 APP / T5 传输中断（探针验证 SP/PC 仍是 `0xFFFFF
 
 ## 6. 移植新芯片
 
-实现 `bl_port.h` 的 12 个函数：
+实现 `bl_port.h` 的 13 个函数：
 
 ```
 flashSectorSize  flashBytesToSectorEnd  flashErase  flashWrite  flashRead
 uartRead  uartWrite  uartFlushRx
 tickMs  delayMs
 resetCause  jumpToApp
+bootPinHeld        没有按钮的平台直接 return false;
 ```
 
 要点：
@@ -164,30 +171,32 @@ resetCause  jumpToApp
 |---|---|
 | 看门狗（IWDG）+ 自确认回滚 | 用户明确要求：IAP 是人在旁边刷的，放弃防回滚 |
 | 配置区 / `Meta` 类 / `kSlotMagic` / 槽位轮转 | 被「向量表最后写」取代（§3.1） |
-| Backdoor（上电 300ms 内按 DEL 进 IAP） | 鸡肋：拖慢每次启动，正常人也卡不准 |
+| 串口 backdoor（上电 300ms 内按 DEL 进 IAP） | 鸡肋：拖慢每次启动，正常人也卡不准。**别和「按住硬件按钮上电」搞混 —— 那个是保留功能（§3.2），一起删掉就少了一条救命通道** |
 | RAM 标志（APP 写 magic 后软复位） | 被「纯复位原因」取代，APP 侧零侵入 |
 | 库自带 `main()` / `chipInit` / `flashInit` / `uartInit` | 库不初始化芯片、不带 main（§1） |
 | `uartTryGetc` / `uartsSetBaudrate` / `verifyImage` / `VectorCheck` | 死代码 |
 | `blRequestUpdate` / `BL_BOOT_MAGIC_STRING`（库内） | APP 侧接口不进库，示例放 `USER.md` |
 | `FwState` / `IapResult::NoSpace` / `ResetCause::BrownOut,LowPower` | 不再使用 |
 | 文件头大块注释 + 三行分节 banner | 用户要求：改成单行 `//` 标题 |
-| 启动时整镜像 CRC（需存 size/crc32） | 用户明确决定：**只在烧录末尾回读校验**就够，
-  不为它保留存储（漏掉的只是刷完之后才发生的 Flash 位翻转） |
+| 启动时整镜像 CRC（需存 size/crc32） | 用户明确决定：**只在烧录末尾回读校验**就够，不为它保留存储（漏掉的只是刷完之后才发生的 Flash 位翻转） |
 
 ---
 
 ## 8. 常见坑（工程与流程类）
 
-1. **`UV4 -f` 不重编**：改过源文件必须 `-r`（§4.1）
-2. **切分支后 `Bootloader/` 大面积显示 `D`**：`git checkout HEAD -- Bootloader/` 恢复
-3. **切分支后不要盲发 `git add -A`**：会把手滑删掉的文件一起提交（本项目犯过，误删了 9 个 `Core/` 文件）
-4. **同一消息里批量 Edit 同一文件会静默丢部分改动**：改完 grep/Read 复核
-5. **轮询模型下别发多字节命令**：YMODEM 之外的自定义交互要按字节慢发
-6. **`%lu` 依赖 `%u` 分支**：精简日志格式化时删 `%u` 会让所有 `%lu` 打成字面量 `%u`
+1. **GPIO 端口时钟没开时读 IDR 恒为 0（本板实测）**：用它做「按下」判据会
+   每次都误判 → 上电永远进 IAP、APP 起不来。`bootPinHeld()` 因此先查时钟位，
+   没开就按「没按」处理
+2. **`UV4 -f` 不重编**：改过源文件必须 `-r`（§4.1）
+3. **切分支后 `Bootloader/` 大面积显示 `D`**：`git checkout HEAD -- Bootloader/` 恢复
+4. **切分支后不要盲发 `git add -A`**：会把手滑删掉的文件一起提交（本项目犯过，误删了 9 个 `Core/` 文件）
+5. **同一消息里批量 Edit 同一文件会静默丢部分改动**：改完 grep/Read 复核
+6. **轮询模型下别发多字节命令**：YMODEM 之外的自定义交互要按字节慢发
+7. **`%lu` 依赖 `%u` 分支**：精简日志格式化时删 `%u` 会让所有 `%lu` 打成字面量 `%u`
    （真板实测暴露过）
-7. **`HSE_VALUE` 真相源只有一个**：`stm32f4xx_hal_conf.h`；别在 Keil 的 `<Define>`
+8. **`HSE_VALUE` 真相源只有一个**：`stm32f4xx_hal_conf.h`；别在 Keil 的 `<Define>`
    里再定义一次
-8. **`bl.h` 要能被 C 包含**：C++ 部分（`namespace bl`）必须在 `#ifdef __cplusplus` 里，
+9. **`bl.h` 要能被 C 包含**：C++ 部分（`namespace bl`）必须在 `#ifdef __cplusplus` 里，
    且用 `<stdint.h>` 而不是 `<cstdint>`
 
 ---
