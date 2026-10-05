@@ -7,7 +7,7 @@
 
 ## 1. 项目定位
 
-串口 IAP Bootloader，做成**可移植的单文件库**：拷 `Bootloader/` 目录进任何工程就能用。
+串口 IAP Bootloader，做成**可移植的库**：拷 `Bootloader/` 目录进任何工程就能用。
 
 三条硬性设计约束（用户定的，别改）：
 
@@ -23,17 +23,21 @@
 ```
 README.md              入口导航（"从哪开始"）
 AGENTS.md / USER.md    给 AI / 给使用者
-Bootloader/            ★ 库本体，5 个文件，0 子目录
+Bootloader/            ★ 库本体，6 个源文件，0 子目录
   README.md              库的唯一文档（提交机制 / 用法 / 移植 / 常见坑）
   bl.h                   对外头文件：blRun() + Status（C 工程也能 include）
-  bl.cpp                 全部实现（日志/CRC/校验/YMODEM/会话/决策/入口）
+  bl.cpp                 主体：日志 / CRC32 / 向量表校验 / 升级会话 / 决策 / 入口
+  bl_protocol.h          协议层声明：Ymodem / YmodemSink / Crc16
+  bl_protocol.cpp        协议层实现：YMODEM-1K + CRC16/XMODEM
   bl_port.h              移植契约（11 个函数 + 扇区表）
   bl_port_stm32f4.cpp    STM32F4 实现（含板级配置：串口实例 / 引脚）
-  bl_config.h            分区参数 + YMODEM 参数 + 日志开关
+  bl_config.h            只需填 2 个数：BL_FLASH_SIZE / BL_BOOT_SIZE
 tools/                 开发工具（不属于库）
   build.py               命令行编译 + 量 ROM（armclang / armlink / fromelf）
   board.py               pyocd 板端操作（备份/烧写/擦除/看串口）
 Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
+                       STM32F401 示例工程（不是库的一部分）
+UserApp/main.cpp       本工程自己的代码入口（见下）
                        STM32F401 示例工程（CubeMX + Keil），非库的一部分
 TestApp/               （仅 test-app 分支）测试 APP + 板端测试脚本
 build/                 编译产物
@@ -41,6 +45,42 @@ build/                 编译产物
 
 **库与示例的分界**：想用库只需拷 `Bootloader/`。示例工程只是"怎么接进真实工程"的
 演示 —— **是库去配合别人的工程，不是别人配合这个仓库**（用户明确要求）。
+
+---
+
+### 2.1 示例工程的宿主结构（重要：别往 CubeMX 的文件里塞代码）
+
+```c
+/* Core/Src/main.c —— CubeMX 生成，只有 USER CODE 区那行是我们要的 */
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();      /* HSI+PLL -> 84MHz（本板 HSE 晶振起不来） */
+    MX_GPIO_Init();
+    MX_USART1_UART_Init();
+
+    Main();                    /* <- USER CODE 区，唯一属于我们的调用 */
+
+    while (1) { }
+}
+```
+
+```cpp
+/* UserApp/main.cpp —— 我们自己的代码都放这儿，重新用 CubeMX 生成不会丢 */
+extern "C" void Main(void)
+{
+    bootPinInit();             /* PC0：按住上电 = 留在 IAP */
+    bootLedInit();             /* PC13：BL 运行期间闪烁 */
+    for (;;) { blRun(); }      /* 不返回：要么在 IAP 里等，要么跳 APP */
+}
+```
+
+要点：
+- `Core/` 下所有文件（main.c / gpio.c / usart.c / stm32f4xx_it.c / …）都是 CubeMX 的，
+  改动**只允许**在 `USER CODE BEGIN/END` 区里（比如 SysTick_Handler 里的 LED 翻转）
+- 时钟用的 HSI 而不是 HSE：本板晶振起不来（实测 HSERDY 恒 0）；换板子要同步改
+  `stm32f4xx_hal_conf.h` 的 `HSE_VALUE` 与这段配置
+- `blRun()` 放在 `for(;;)` 里只是语义清楚 —— 它不返回，循环体实际只执行一次
 
 ---
 

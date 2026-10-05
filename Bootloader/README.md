@@ -1,6 +1,6 @@
 # Bootloader-Everywhere
 
-串口 IAP Bootloader，单文件库。给一个 bin 就能刷进 APP 区，**任何时刻断电都不会变砖**。
+串口 IAP Bootloader，可移植库。给一个 bin 就能刷进 APP 区，**任何时刻断电都不会变砖**。
 
 - 协议：YMODEM-1K，网页端上位机在 https://zhangkeliang0627.github.io/Bootloader-Everywhere/
 - 库不初始化芯片，也不带 `main()` —— 芯片由宿主工程带起来，库只被 `blRun()` 调一次
@@ -11,13 +11,16 @@
 ```
 Bootloader/
 ├── bl.h                 对外头文件：blRun() + Status（C 工程也能 include）
-├── bl.cpp               全部实现（日志/CRC/校验/YMODEM/会话/决策/入口）
+├── bl.cpp               主体：日志 / CRC32 / 向量表校验 / 升级会话 / 决策 / 入口
+├── bl_protocol.h        协议层声明：Ymodem / YmodemSink / Crc16
+├── bl_protocol.cpp      协议层实现：YMODEM-1K 接收端 + CRC16/XMODEM
 ├── bl_port.h            移植契约：11 个函数 + 一张扇区表
 ├── bl_port_stm32f4.cpp  STM32F4 现成实现（换芯片照它再写一份）
 └── bl_config.h          分区参数 + YMODEM 参数 + 日志开关
 ```
 
-没有子目录。**要用库 = 拷这 5 个文件**（`bl_port.h` 只是契约，可以不拷进工程）。
+没有子目录。**要用库 = 拷这 6 个源文件**（`bl_port.h` 与 `bl_protocol.h` 是声明，
+按需要拷）。协议层单独成文件只为读起来清楚 —— 改协议看 `bl_protocol.*`，改决策/升级流程看 `bl.cpp`。
 
 ## 怎么用（三步）
 
