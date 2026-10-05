@@ -12,7 +12,7 @@
 Bootloader/
 ├── bl.h                 对外头文件：blRun() + Status（C 工程也能 include）
 ├── bl.cpp               全部实现（日志/CRC/校验/YMODEM/会话/决策/入口）
-├── bl_port.h            移植契约：要实现的 13 个函数
+├── bl_port.h            移植契约：11 个函数 + 一张扇区表
 ├── bl_port_stm32f4.cpp  STM32F4 现成实现（换芯片照它再写一份）
 └── bl_config.h          分区参数 + YMODEM 参数 + 日志开关
 ```
@@ -121,15 +121,21 @@ APP 区最前面两个字是向量表的 **SP**（初始栈顶）和 **PC**（�
 
 ## 移植（换芯片）
 
-实现 `bl_port.h` 的 13 个函数，`bl.cpp` 一个字都不用改：
+写 `bl_port.h` 的 11 个函数 + 一张扇区表，`bl.cpp` 一个字都不用改：
 
 ```
-flashSectorSize  flashBytesToSectorEnd  flashErase  flashWrite  flashRead
+flashErase  flashWrite  flashRead
 uartRead  uartWrite  uartFlushRx
 tickMs  delayMs
 resetCause  jumpToApp
-bootPinHeld        （没按钮的直接 return false）
+bootPinHeld         （没按钮的直接 return false）
+
+kFlashSectors[]    扇区表（bl_port.h 的 struct FlashSector）
 ```
+
+扇区表就是「S0 在 0x08000000 占 16KB、S4 是 64KB、S5 起每个 128KB」这样的直白列表
+（`bl_port_stm32f4.cpp` 里现成一份，地址一眼可查）。**怎么按扇区走由库负责，
+port 只提供事实** —— 所以表在 `bl_port.h` 里声明、port 里定义。
 
 三条约定：
 
@@ -138,6 +144,8 @@ bootPinHeld        （没按钮的直接 return false）
 - 所有「等标志位」的循环都要带超时
 
 宿主必须先初始化好：时钟、串口（8N1，波特率与上位机一致）、Flash 接口时钟。
+port 用 HAL 收发串口，所以要能拿到宿主的句柄名 —— 板级配置区一行
+`extern "C" UART_HandleTypeDef huart1;`（换了句柄名只改这一行）。
 要用「按住按钮上电」还要把按钮引脚配成「输入 + 上拉」——**这步漏了按键就没反应**，
 但不会误判（见下面「常见坑」）。
 若宿主用中断收串口，IAP 期间要关掉收类中断 —— 库是轮询收的，
@@ -159,7 +167,7 @@ bootPinHeld        （没按钮的直接 return false）
 
 | 项 | 值 |
 |---|---|
-| 整份固件（库 + 宿主 + HAL + CMSIS） | 12624 B，16KB 区余量 3760 B（含按键功能） |
-| 库本体（`tools/build.py` 量，不含 HAL 与宿主时钟） | 约 8.4KB |
+| 整份固件（库 + 宿主 + HAL + CMSIS） | 13008 B，16KB 区余量 3376 B |
+| 库本体（`tools/build.py` 量库 + port，不含宿主） | 8876 B |
 | 关日志（`-DBL_DEBUG_LOG=0`） | 再省约 2.7KB |
 | 真板回归 | `TestApp/tools/test_auto.py` T1-T5 全通过 |

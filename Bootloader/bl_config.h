@@ -7,7 +7,7 @@
 //   STM32F405/7  1MB   → BOOT 16KB | APP 1008KB
 //
 // APP 区必须落在扇区起点上：Flash 只能整扇区擦，差一个字节会连邻近区一起擦掉。
-// 上面是编译期粗查，上电还会用 flashBytesToSectorEnd() 精查一次。
+// 上电还会用 flashSectorAt() 查扇区表精查一次（表由 port 提供）。
 #ifndef BL_FLASH_BASE
 #define BL_FLASH_BASE           0x08000000UL
 #endif
