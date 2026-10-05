@@ -391,80 +391,26 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>LUMOS/Bootloader/core</GroupName>
+          <GroupName>LUMOS/Bootloader</GroupName>
           <Files>
             <File>
-              <FileName>bl_log.cpp</FileName>
+              <FileName>bl.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\Bootloader\core\bl_log.cpp</FilePath>
+              <FilePath>..\Bootloader\bl.cpp</FilePath>
             </File>
             <File>
-              <FileName>bl_crc.cpp</FileName>
+              <FileName>bl_port_stm32f4.cpp</FileName>
               <FileType>8</FileType>
-              <FilePath>..\Bootloader\core\bl_crc.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_meta.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\core\bl_meta.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_ymodem.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\core\bl_ymodem.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_verify.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\core\bl_verify.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_session.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\core\bl_session.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_boot.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\core\bl_boot.cpp</FilePath>
+              <FilePath>..\Bootloader\bl_port_stm32f4.cpp</FilePath>
             </File>
           </Files>
         </Group>
-        <Group>
-          <GroupName>LUMOS/Bootloader/target</GroupName>
-          <Files>
-            <File>
-              <FileName>bl_platform_stm32f4.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\target\stm32f4\bl_platform_stm32f4.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_port_flash_stm32f4.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\target\stm32f4\bl_port_flash_stm32f4.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_port_uart_stm32f4.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\target\stm32f4\bl_port_uart_stm32f4.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>bl_port_system_stm32f4.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\target\stm32f4\bl_port_system_stm32f4.cpp</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>LUMOS/Bootloader/app</GroupName>
-          <Files>
-            <File>
-              <FileName>bl_entry.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\Bootloader\app\bl_entry.cpp</FilePath>
-            </File>
-          </Files>
-        </Group>
+
+        
+
+        
+        
+        
         <Group>
           <GroupName>LUMOS/Drivers/HAL</GroupName>
           <Files>
