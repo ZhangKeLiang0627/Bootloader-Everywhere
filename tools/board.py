@@ -6,7 +6,7 @@ LUMOS-bootloader 板端调试工具（DAPLink / CMSIS-DAP + pyocd + pyserial）
 手工点鼠标是跑不完的）。
 
 用法示例：
-    python tools/board.py info                       # 芯片信息 + 分区占用 + 配置区状态
+    python tools/board.py info                       # 芯片信息 + 分区占用 + APP 区是否可启动
     python tools/board.py backup                     # 整片备份到桌面 board_flash_backup/
     python tools/board.py restore <backup.bin>       # 还原
     python tools/board.py erase 0x08060000-0x08080000
@@ -138,19 +138,17 @@ def cmd_info(args):
                   % (i, flash_base + off, sz // 1024,
                      '空' if nz == 0 else '%d 字节' % nz, note))
 
-        # 配置区（最后一个扇区）的槽位扫描：本库的槽魔数是 "LUMS"
-        meta_base = flash_base + flash_size - 128 * 1024
+        # APP 区（0x08004000）能否启动：看最前面两个字
+        app_base = flash_base + 16 * 1024
         print()
-        print('配置区扫描 0x%08X（槽魔数 "LUMS" = 0x4C554D53）:' % meta_base)
-        found = 0
-        for i in range(0, 128 * 1024, 64):
-            head = bytearray(t.read_memory_block8(meta_base + i, 8))
-            if head[:4] == b'\xff\xff\xff\xff':
-                break
-            magic = int.from_bytes(head[4:8], 'little')
-            if magic == 0x4C554D53:
-                found += 1
-        print('  有效槽位数：%d %s' % (found, '(空配置区)' if found == 0 else ''))
+        asp = t.read32(app_base)
+        apc = t.read32(app_base + 4)
+        sp_ok = 0x20000000 <= asp <= 0x20030000
+        pc_ok = (app_base <= apc < flash_base + flash_size) and (apc & 1) != 0
+        print('APP 区 0x%08X： SP=0x%08X  Reset=0x%08X' % (app_base, asp, apc))
+        print('  上电行为：%s' % ('跳转 APP'
+                                 if (sp_ok and pc_ok)
+                                 else '停在 IAP（向量表非法 —— 空片 / 上次传输没提交）'))
     finally:
         try:
             t.resume()

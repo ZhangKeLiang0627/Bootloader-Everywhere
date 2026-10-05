@@ -3,8 +3,8 @@
 一个**最小但真实**的 APP，用来验证 Bootloader 的完整升级链路：
 
 ```
-Bootloader 启动 → 等 YMODEM → 接收固件 → 擦除/写入 APP 区 → CRC 校验
-    → 状态置 VALID → 直接跳转到 APP → APP 正常运行
+Bootloader 启动 → 等 YMODEM → 接收固件 → 擦除/写入 APP 区
+    → 回读校验 CRC → 写回向量表前两个字（提交）→ 直接跳转到 APP → APP 正常运行
 ```
 
 它不是"为了测试而拼凑的假件"，而是一个**能独立运行的真实 APP**：
@@ -133,8 +133,9 @@ for i in range(8):
 
 本 APP 运行中会在主循环轮询串口，逐字节匹配关键字
 `#Bootloader-Everywhere`；匹配完整就写 `SCB->AIRCR` 触发一次软件复位。
-Bootloader 靠复位原因识别「软件复位 + 固件 Valid 态」，进入 15s 限时升级
-窗口 —— 这就是网页端「点开始升级自动唤回」的板端对应实现。
+Bootloader 靠复位原因识别（软件复位），进入 15s 限时升级窗口 ——
+这就是网页端「点开始升级自动唤回」的板端对应实现。
 
-真实 APP 接入只需 `#include "bl.h"` 并自己匹配关键字后调
-`blRequestUpdate()`（零依赖，不需要 CMSIS）。
+真实 APP 要做的就这么多：匹配关键字 → 写 `SCB->AIRCR` 软复位。
+库**不提供**这个接口，关键字与匹配方式都由 APP 自己定，
+示例见 `USER.md`。

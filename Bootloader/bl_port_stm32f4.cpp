@@ -177,7 +177,7 @@ Status flashErase(uint32_t addr, uint32_t len) noexcept
 // 写入
 //
 // F4 编程单位是 32 位字。正常路径下 core 传入的地址与长度都是 4 的倍数
-// （YMODEM 数据区天然对齐、配置区槽为 64 字节），但这里仍处理尾巴不足
+// （YMODEM 数据区天然对齐、提交时写 8 字节），但这里仍处理尾巴不足
 // 一个字的情况：读出原字 → 合并 → 写回。
 Status flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept
 {

@@ -66,3 +66,7 @@ MDK-ARM/LUMOS-bootloader.uvguix.*
 # Keil 命令行构建/下载日志
 MDK-ARM/uv_build.log
 MDK-ARM/uv_flash.log
+
+# Python 缓存
+__pycache__/
+*.pyc
