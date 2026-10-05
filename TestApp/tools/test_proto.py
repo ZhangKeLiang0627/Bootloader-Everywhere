@@ -275,7 +275,9 @@ def T5_addr_gap():
         # 跳过第 1 帧，直接发第 2 帧
         f = data_frame(link, body, 2 * BLOCK_SIZE, total_pkts, jump=True)
         code = f['data'][0] if f else None
-        want = struct.unpack('<I', f['data'][1:5])[0] if f else 0
+        # 所有 DATA 应答同格式：[code][cumCrc32:4][nextAddr:4]
+        # （0x07 跳号也只是 cumCrc32 无意义，地址字段照给）
+        want = struct.unpack('<I', f['data'][5:9])[0] if f else 0
         expect = APP_BASE + 8 + BLOCK_SIZE
     finally:
         link.close()

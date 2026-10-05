@@ -247,8 +247,21 @@ def send(args):
         addr0 = args.app_base + 8
         last_ack = None
         chunk_fail = 0
+        last_offset = -1
+        stuck = 0
         t0 = time.time()
         while offset < len(body):
+            # 卡死保护：从机持续报同一个错、或报无效的期望地址时 offset 不推进，
+            # 必须在同一个位置上停下来，不能无限重试
+            if offset == last_offset:
+                stuck += 1
+                if stuck > args.retries:
+                    print("★ 位置 %d 连续 %d 次无法推进，中止" % (offset, stuck))
+                    return 1
+            else:
+                stuck = 0
+                last_offset = offset
+
             idx = offset // BLOCK_SIZE
             data = body[offset:offset + BLOCK_SIZE]
             addr = addr0 + offset
@@ -265,6 +278,7 @@ def send(args):
                 continue
             chunk_fail = 0
             code = f['data'][0]
+            # 所有 DATA 应答都是同一格式：[code][cumCrc32:4][nextAddr:4]
             dev_crc, expect = (struct.unpack('<II', f['data'][1:9]) if len(f['data']) >= 9
                                else (0, 0))
             if code != 0x00:

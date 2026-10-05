@@ -561,9 +561,7 @@ void Session::onData(const proto::Frame& f) noexcept
         return;
     }
     if (addr != nextAddr_) {                    // 跳号：告诉主机从哪里续发
-        uint8_t body[4];
-        proto::putLe32(&body[0], nextAddr_);
-        reply(kCmdData, static_cast<uint8_t>(Code::AddrGap), body, 4U);
+        replyData(static_cast<uint8_t>(Code::AddrGap));   // 与其它 DATA 应答同格式
         return;
     }
     if (index != static_cast<uint16_t>((addr - BL_APP_BASE - 8U) / kBlockSize)) {
