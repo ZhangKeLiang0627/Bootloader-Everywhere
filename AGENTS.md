@@ -28,7 +28,7 @@ README.md              入口导航（"从哪开始"）
 AGENTS.md / USER.md    给 AI / 给使用者
 Bootloader/            ★ 库本体，6 个文件，0 子目录
   README.md              库的唯一文档（含移植指南、常见坑）
-  bl.h                   唯一入口（bl_run / bl_request_update / 公共类型）
+  bl.h                   唯一入口（blRun / blRequestUpdate / 公共类型）
   bl.cpp                 全部实现（日志/CRC/元数据/校验/YMODEM/会话/决策/入口）
   bl_port.h              移植契约（要实现的函数 + 填空说明）
   bl_port_stm32f4.cpp    STM32F4 实现（含板级配置：串口/引脚）
@@ -97,13 +97,13 @@ grep -E '#include *[<"](stm32|gd32|ch32|hal)' Bootloader/bl.cpp   # 必须无输
 
 第 ② 步限定 `state == Valid` 是必须的：否则"升级完成后的复位"也会被当成唤回。
 
-`reset_cause()` **每次启动必读**（read-and-clear）：`RCC_CSR` 的复位标志是累积的，
+`resetCause()` **每次启动必读**（read-and-clear）：`RCC_CSR` 的复位标志是累积的，
 只有读才清。漏读会让标志粘住，下次启动误判。
 
 ### 5.2 升级的原子提交（`bl.cpp` ⑥ 会话节）
 
 ```
-① meta.mark_download()  置 Download（先让固件"不可信"）
+① meta.markDownload()  置 Download（先让固件"不可信"）
 ② 擦除 APP 区
 ③ 接收 YMODEM 并写入
 ④ 边收边算 CRC32
@@ -115,7 +115,7 @@ grep -E '#include *[<"](stm32|gd32|ch32|hal)' Bootloader/bl.cpp   # 必须无输
 ### 5.3 唤回窗口
 
 - `bl.cpp` 握手超时 = `BL_YMODEM_HANDSHAKE_MS`（15s）；置 0 = 无限等
-- 窗口内没等到首包 → 跳回 APP（判据：`Failed + Timeout + fw_size == 0`）
+- 窗口内没等到首包 → 跳回 APP（判据：`Failed + Timeout + fwSize == 0`）
 - 正常上电/按复位 → 零等待直接跳 APP
 
 ### 5.4 配置区（`bl.cpp` ③ 元数据节）
@@ -207,9 +207,9 @@ python TestApp/tools/power_test.py --phase N   # 断电暴力测试（人工拔�
 ## 9. 常见坑（都实测过）
 
 1. **探针拖 PIN 复位**：DAPLink 连着时软复位会连带置 `PINRSTF`，
-   `reset_cause()` 必须让 `SFTRSTF` 优先，否则唤回在开发期失灵
+   `resetCause()` 必须让 `SFTRSTF` 优先，否则唤回在开发期失灵
 2. **配置区残槽**：无有效槽且区内有脏数据时，必须先擦整片再从头写，
-   否则 `mark_download` 写偏移 0 撞上未擦除 Flash，表现为"永远升级失败"
+   否则 `markDownload` 写偏移 0 撞上未擦除 Flash，表现为"永远升级失败"
 3. **pyocd 烧写 0x1**：优先 `UV4 -f`
 4. **切分支后 Bootloader/ 文件丢失**：`git checkout HEAD -- Bootloader/`
 5. **批量 Edit 部分丢失**：同一消息里对同一文件发多个 Edit 可能静默丢，改完务必验证落盘

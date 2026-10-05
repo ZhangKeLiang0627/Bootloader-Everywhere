@@ -326,9 +326,9 @@ PC 脚本：board_test.py 增加 --cut-at 参数
 |---|---|---|---|
 | 1 | 跳转后 APP 完全不输出 | `HAL_RCC_DeInit()` 会重新使能 SysTick，而"关 SysTick"写在了它前面 | 致命 |
 | 2 | IWDG 等待循环死锁 | 初始化顺序反了（先改参数后启动），PVU/RVU 无时钟可清 | 致命 |
-| 3 | 硬浮点指令触发 UsageFault | `platform_init()` 漏了 FPU 使能 | 致命 |
-| 4 | 热跳转时 PLL 配置被静默忽略 | 写 `PLLCFGR` 前没先关 PLL；且 `if (hse_ok)` 没包住"开 PLL+切 PLL" | 致命 |
-| 5 | 回滚永不触发 | `reset_cause()` 是读后即清，却只在 Testing 分支调用 → 标志累积；且首次启动与"按复位"在复位原因上无法区分 | 严重 |
+| 3 | 硬浮点指令触发 UsageFault | `platformInit()` 漏了 FPU 使能 | 致命 |
+| 4 | 热跳转时 PLL 配置被静默忽略 | 写 `PLLCFGR` 前没先关 PLL；且 `if (hseOk)` 没包住"开 PLL+切 PLL" | 致命 |
+| 5 | 回滚永不触发 | `resetCause()` 是读后即清，却只在 Testing 分支调用 → 标志累积；且首次启动与"按复位"在复位原因上无法区分 | 严重 |
 | 6 | SWD 烧写全系列失败 | 杜邦线过长导致信号完整性差 | 阻塞 |
 
 **这 6 条的共同点：都不是逻辑写错，而是「顺序」「时序」「环境」层面的问题 ——
