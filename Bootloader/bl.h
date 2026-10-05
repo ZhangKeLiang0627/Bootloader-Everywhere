@@ -1,4 +1,4 @@
-// LUMOS-bootloader 唯一的对外头文件。
+// Bootloader-Everywhere 唯一的对外头文件。
 // 用法见 Bootloader/README.md；移植接口见 bl_port.h。
 #ifndef BL_H
 #define BL_H

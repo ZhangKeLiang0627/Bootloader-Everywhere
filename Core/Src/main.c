@@ -1,4 +1,4 @@
-/* LUMOS-bootloader 的宿主工程：把芯片初始化好，然后把控制权交给库。
+/* Bootloader-Everywhere 的宿主工程：把芯片初始化好，然后把控制权交给库。
  *
  * 库不做任何初始化，也不带 main() —— 时钟、串口、Flash 接口时钟全在这里配好。
  * usart.c / gpio.c / stm32f4xx_it.c / stm32f4xx_hal_msp.c 都是 CubeMX 生成的，

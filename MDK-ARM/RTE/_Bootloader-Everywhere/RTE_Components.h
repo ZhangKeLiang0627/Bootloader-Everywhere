@@ -3,8 +3,8 @@
  * Auto generated Run-Time-Environment Configuration File
  *      *** Do not modify ! ***
  *
- * Project: 'LUMOS-bootloader' 
- * Target:  'LUMOS-bootloader' 
+ * Project: 'Bootloader-Everywhere' 
+ * Target:  'Bootloader-Everywhere' 
  */
 
 #ifndef RTE_COMPONENTS_H

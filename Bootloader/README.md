@@ -1,4 +1,4 @@
-# LUMOS-bootloader
+# Bootloader-Everywhere
 
 串口 IAP Bootloader，单文件库。给一个 bin 就能刷进 APP 区，**任何时刻断电都不会变砖**。
 
