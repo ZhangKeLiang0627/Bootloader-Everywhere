@@ -14,7 +14,7 @@
 void Main(void)
 {
     HAL_Delay(1000);
-    Usart_debugMsg("LUMOS-bootloader begin!");
+    Usart_debugMsg("Bootloader-Everywhere begin!");
 
     char json[] = "{\"sensor\":\"gps\",\"time\":1351824120,\"data\":[48.756080,2.302038]}";
 
@@ -27,7 +27,7 @@ void Main(void)
     
     for (;;)
     {   
-        Usart_debugMsg("LUMOS-bootloader is running!");
+        Usart_debugMsg("Bootloader-Everywhere is running!");
         HAL_Delay(5000);
     }
 }
