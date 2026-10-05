@@ -10,6 +10,7 @@
 #include "bl.h"
 
 static void SystemClock_Config(void);
+static void bootPinInit(void);
 
 int main(void)
 {
@@ -19,11 +20,32 @@ int main(void)
 
   MX_GPIO_Init();
   MX_USART1_UART_Init();      /* PA9 / PA10，115200 8N1 —— 与上位机一致 */
+  bootPinInit();              /* PC0：按住它上电 = 留在 IAP（见下） */
 
   blRun();                    /* 库的入口：决策 + 收固件，永不返回 */
 
   for (;;) {
   }
+}
+
+/* 把 PC0 配成「输入 + 上拉」，供 Bootloader 的「按住按钮上电 = 留在 IAP」使用。
+ *
+ * 库不初始化外设，所以这个脚由宿主负责配好。库那边只做两件事：
+ * 先确认 GPIOC 时钟已开（没开就当「没按」，避免时钟关掉时 IDR 恒 0 被误判成按住），
+ * 再读电平，连读两次都按下才算数。
+ *
+ * 换板子/换引脚：改这里 + Bootloader/bl_port_stm32f4.cpp 顶部那四行宏。
+ */
+static void bootPinInit(void)
+{
+  GPIO_InitTypeDef btn = {0};
+
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  btn.Pin  = GPIO_PIN_0;
+  btn.Mode = GPIO_MODE_INPUT;
+  btn.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &btn);
 }
 
 /* 系统时钟：HSI + PLL → 84MHz

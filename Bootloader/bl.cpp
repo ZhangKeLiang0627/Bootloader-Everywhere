@@ -1080,17 +1080,23 @@ Boot::Decision Boot::decide(const Config& cfg) noexcept
     const ResetCause cause = resetCause();
     BL_LOG("[boot] reset cause = %lu\r\n", static_cast<unsigned long>(cause));
 
-    // 1. 向量表非法 → 没有可启动的固件（空片 / 传输中途掉电），留在 IAP
+    // 1. 按住硬件按钮上电 → 强制留在 IAP。
+    //    人在板子旁边、意图明确，所以是无限等（握手超时后本循环会重新握手，不会跳走）。
+    if (bootPinHeld()) {
+        return { Action::EnterIap, "boot pin held" };
+    }
+
+    // 2. 向量表非法 → 没有可启动的固件（空片 / 传输中途掉电），留在 IAP
     if (!ok(checkVectors(cfg.appBase))) {
         return { Action::EnterIap, "no bootable firmware" };
     }
 
-    // 2. 软件复位 → 进限时升级窗口（APP 唤回通道）
+    // 3. 软件复位 → 进限时升级窗口（APP 唤回通道）
     if (cause == ResetCause::Software) {
         return { Action::EnterIapTimed, "soft reset -> upgrade window" };
     }
 
-    // 3. 可以跳了
+    // 4. 可以跳了
     return { Action::JumpToApp, "ok" };
 }
 
