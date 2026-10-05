@@ -1,6 +1,6 @@
 # Bootloader-Everywhere
 
-串口 IAP Bootloader，做成**可搬走的单文件库**，外加一个能一键刷机的网页上位机。
+串口 IAP Bootloader，做成**可搬走的库**，外加一个能一键刷机的网页上位机。
 任何时刻断电都不会变砖。
 
 **在线刷机页：<https://zhangkeliang0627.github.io/Bootloader-Everywhere/>**
@@ -26,7 +26,8 @@
 | **想用这个库 / 理解它** | [`Bootloader/README.md`](Bootloader/README.md) ← 从这里开始 |
 | 想把它移植到别的芯片 | 同上，「移植（换芯片）」一节 |
 | 想改 Flash 分区 / 超时 | [`Bootloader/bl_config.h`](Bootloader/bl_config.h) |
-| 想改协议 / 升级流程 | [`Bootloader/bl.cpp`](Bootloader/bl.cpp) |
+| 想改 YMODEM 协议 | [`Bootloader/bl_protocol.cpp`](Bootloader/bl_protocol.cpp) |
+| 想改升级流程 / 启动决策 | [`Bootloader/bl.cpp`](Bootloader/bl.cpp) |
 | 想用网页刷机 | 上面的在线地址，或 web 分支的 `docs/` |
 | 想跑自动化/断电测试 | `TestApp/tools/`（test-app 分支） |
 | **接手开发（人或 AI）** | [`AGENTS.md`](AGENTS.md) |
@@ -37,7 +38,7 @@
 ## 仓库里有什么
 
 ```
-Bootloader/        ★ 就是这个库，5 个文件，没有子目录
+Bootloader/        ★ 就是这个库，6 个源文件，没有子目录
 tools/             开发工具：编译量体积（build.py）、板端操作（board.py）
 AGENTS.md          给接手的人 / AI 的完整说明
 USER.md            给使用者的快速上手
