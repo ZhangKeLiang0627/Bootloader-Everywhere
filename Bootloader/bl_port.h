@@ -1,4 +1,4 @@
-// 移植契约：库与芯片之间唯一的耦合面。换芯片就实现这 13 个函数。
+// 移植契约：库与芯片之间唯一的耦合面。换芯片就写这 11 个函数 + 一张扇区表。
 //
 // 库不做任何初始化 —— 时钟、串口、Flash 接口时钟都由宿主工程负责，
 // 本层只提供「操作」。已经有一份现成的 STM32F4 实现：bl_port_stm32f4.cpp。
@@ -23,15 +23,39 @@ enum class ResetCause : uint32_t {
     Software,       // 软件复位（APP 主动触发的那种）
 };
 
-// ---- Flash ----
-uint32_t flashSectorSize(uint32_t addr) noexcept;        // 含 addr 的扇区大小；0 = 地址非法
-uint32_t flashBytesToSectorEnd(uint32_t addr) noexcept;  // addr 到下一扇区边界的字节数
-Status   flashErase(uint32_t addr, uint32_t len) noexcept;   // 整扇区擦除（addr/len 已对齐）
-Status   flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept;
-Status   flashRead(uint32_t addr, void* buf, uint32_t len) noexcept;
+// ---- Flash 布局：库只认「扇区表」，遍历算法在库里，移植时只填表 ----
+//
+// 为什么是表而不是函数：F4 的扇区不等长（16KB×4 + 64KB + 128KB×N），用算式推算
+// 既难读又难改；列成表以后每个扇区的地址一眼可查，也不用动逻辑。
+struct FlashSector {
+    uint32_t base;   // 扇区起始地址
+    uint32_t size;   // 扇区大小
+};
+
+// 由 port 实现提供（示例见 bl_port_stm32f4.cpp）。下标 = 擦除时的扇区号。
+extern const FlashSector kFlashSectors[];
+extern const uint32_t    kFlashSectorCount;
+
+// 查表：返回包含 addr 的那个扇区；找不到（地址不在表内）返回 nullptr
+// 库与 port 共用这一份，避免各写一遍
+inline const FlashSector* flashSectorAt(uint32_t addr) noexcept
+{
+    for (uint32_t i = 0U; i < kFlashSectorCount; ++i) {
+        const FlashSector& s = kFlashSectors[i];
+        if (addr >= s.base && addr < (s.base + s.size)) {
+            return &s;
+        }
+    }
+    return nullptr;
+}
+
+// ---- Flash 擦写读 ----
+Status flashErase(uint32_t addr, uint32_t len) noexcept;   // 整扇区擦除（addr/len 已对齐）
+Status flashWrite(uint32_t addr, const void* data, uint32_t len) noexcept;
+Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept;
 
 // ---- 串口（宿主已初始化好，本层只收发）----
-// uartRead 的 timeoutMs 是「总超时」而不是「每字节超时」
+// uartRead 的 timeoutMs 是「总超时」（必须 > 0；0 会立刻超时返回），不是「每字节超时」
 Status uartRead(uint8_t* buf, uint32_t len, uint32_t timeoutMs, uint32_t* outRead) noexcept;
 Status uartWrite(const uint8_t* buf, uint32_t len) noexcept;
 void   uartFlushRx() noexcept;                            // 清空接收缓冲与溢出标志
