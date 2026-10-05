@@ -21,9 +21,11 @@ TestApp/
 ├── link_app.sct         链接脚本：整个镜像从 0x08004000 开始，上限 368KB
 ├── build_app.py         构建脚本（armclang + armasm + armlink）
 └── tools/
-    ├── proto.py         载体层参考实现 + 命令行升级上位机（也是网页端的协议参照）
-    ├── test_proto.py    板端回归测试 T1-T5
-    └── board_test.py    板端基础设施（烧写 / 复位 / 观察串口 / info）
+    ├── proto.py             载体层参考实现 + 命令行升级上位机（网页端的协议参照）
+    ├── test_proto.py        正常路径回归 T1-T5
+    ├── test_proto_edge.py   边界与畸形输入 E1-E15
+    ├── test_proto_perf.py   不同固件大小的耗时实测
+    └── board_test.py        板端基础设施（烧写 / 复位 / 观察串口 / info）
 ```
 
 ## 构建
@@ -47,6 +49,8 @@ python TestApp/build_app.py
 python TestApp/tools/proto.py send build/app_test.bin      # 默认 COM3
 python TestApp/tools/proto.py selftest                     # 只校验两端口径，不碰串口
 python TestApp/tools/test_proto.py                         # 一键跑 T1-T5
+python TestApp/tools/test_proto_edge.py                    # 边界与畸形输入 E1-E15
+python TestApp/tools/test_proto_perf.py --sizes 2,64,200   # 耗时实测（KB）
 ```
 
 预期输出：

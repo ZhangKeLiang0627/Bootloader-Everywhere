@@ -157,12 +157,18 @@ python tools/build.py --all      # 各芯片 × 各优化等级对比
 ### 4.3 真板回归（test-app 分支）
 
 ```bash
-python TestApp/build_app.py --fail 0     # 正常固件 app_test.bin
-python TestApp/tools/test_auto.py        # 跑 T1-T5，逐项判 PASS/FAIL
+python TestApp/build_app.py --fail 0                      # 正常固件 app_test.bin
+python TestApp/tools/test_proto.py                        # 正常路径 T1-T5
+python TestApp/tools/test_proto_edge.py                   # 边界与畸形输入 E1-E15
+python TestApp/tools/test_proto_perf.py --sizes 2,64,200  # 耗时实测（KB）
 ```
 
-测试项：T1 正常升级并跳转 / T2 连续升级 x5 / T3 软复位唤回进窗口 /
-T4 窗口超时跳回 APP / T5 传输中断（探针验证 SP/PC 仍是 `0xFFFFFFFF` 且数据已写入）。
+测试项：
+- T1 正常升级并跳转 / T2 连续升级 x5 / T3 传输中断不变砖 /
+  T4 篡改帧被拒且可恢复 / T5 跳号被拒并给出续传点
+- E1-E15 边界与畸形输入（超大固件 / 极小固件 / 向量表非法 / 各类字段不一致 /
+  载体层丢帧 / 坏固件被提交后仍能恢复），**每条都断言被拒绝时 APP 区未被改动**
+- 实测耗时与优化空间见 `docs/PROTOCOL_DESIGN.md` §0.7
 
 **库改动后必须上板跑一遍**，不能只靠编译通过。
 
@@ -252,6 +258,15 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
    里再定义一次
 10. **`bl.h` 要能被 C 包含**：C++ 部分（`namespace bl`）必须在 `#ifdef __cplusplus` 里，
    且用 `<stdint.h>` 而不是 `<cstdint>`
+11. **`target.write_memory_block8()` 改不了 Flash**：实测对本芯片的 Flash 地址
+   **完全不生效**（写完读回内容不变）—— Flash 只能 1→0，未经擦除写不进去，而
+   pyocd 的内存写路径也不会自动走 Flash 编程算法。改 Flash 只有两条路：擦扇区
+   （`FlashEraser`）或烧 hex/bin（`FileProgrammer`）。
+   本项目因此踩过一个**测试假阳性**：用「写 `0xFF`」来清向量表其实是空操作，而设备
+   被探针复位带进了 15 秒窗口、STATUS 有应答，于是测试误判成「已恢复」
+12. **探针复位会置 `SFTRSTF`**：`reset_and_halt()` 让设备被判成「软件复位」→ 进 15 秒
+   唤回窗口。所以「复位后是否停 IAP」不能只看 STATUS 有没有应答（窗口期内也有），
+   要抓串口启动日志看 `decision: ...` 那一行来区分
 
 ---
 
@@ -287,7 +302,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   `Parser` 与 `readFrame()` 都会校验，长度可疑的帧直接丢、让主机重传。
 - 传输层**中断接收**：`uartRxIrqHandler` + 512 B 环形缓冲，寄存器实现，不用 HAL_UART。
   宿主只需在 `USART1_IRQHandler` 里调 `blUartRx()`，**不要**再调 `HAL_UART_IRQHandler`。
-- 上位机 `TestApp/tools/proto.py`；板端回归 `TestApp/tools/test_proto.py`（T1-T5）。
+- 上位机 `TestApp/tools/proto.py`；板端测试三个脚本：`test_proto.py`（T1-T5 正常路径）、
+  `test_proto_edge.py`（E1-E15 边界与畸形输入）、`test_proto_perf.py`（耗时实测）。
 
 > ⚠️ **不要再引入 YMODEM**（实现已整体删除）。"任何第三方工具都能刷"这个便利性是有意
 > 放弃的 —— 换来了可读的帧格式、精确的错误定位与可扩展的命令空间，代价见设计文档「代价与风险」。
