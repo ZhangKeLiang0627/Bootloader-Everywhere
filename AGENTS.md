@@ -40,6 +40,8 @@ Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
 UserApp/main.cpp       本工程自己的代码入口（见 §2.1）
 docs/                  设计文档
   PROTOCOL_DESIGN.md     协议设计：§0 是现行 0xA5 帧协议的规格与实现要点
+  PERF_COMPARISON.md     性能对比：与 YMODEM / esptool / mcumgr / OpenBLT / UDS 的
+                         帧开销、端到端耗时与能力对比，含优化清单
 TestApp/               （仅 test-app 分支）测试 APP + 板端测试脚本
 build/                 编译产物
 ```
@@ -302,8 +304,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   `Parser` 与 `readFrame()` 都会校验，长度可疑的帧直接丢、让主机重传。
 - 传输层**中断接收**：`uartRxIrqHandler` + 512 B 环形缓冲，寄存器实现，不用 HAL_UART。
   宿主只需在 `USART1_IRQHandler` 里调 `blUartRx()`，**不要**再调 `HAL_UART_IRQHandler`。
-- 上位机 `TestApp/tools/proto.py`；板端测试三个脚本：`test_proto.py`（T1-T5 正常路径）、
-  `test_proto_edge.py`（E1-E15 边界与畸形输入）、`test_proto_perf.py`（耗时实测）。
+- 上位机 `TestApp/tools/proto.py`；板端测试四个脚本：`test_proto.py`（T1-T5 正常路径）、
+  `test_proto_edge.py`（E1-E15 边界与畸形输入）、`test_proto_perf.py`（耗时实测）、
+  `stress_iap.py`（S1-S12 压测：连续升级 / 逐帧错误注入 / 应答丢失幂等 /
+  重放污染探测 / 跳号续传 / 背靠背会话 / 突发帧 / 空闲超时）。
+  载体层另有 PC 侧压测 `tools/stress_protocol.cpp`（fuzz + 突变 + 恢复能力）。
+- 性能对比（与 YMODEM / esptool / mcumgr / OpenBLT / UDS）见 `docs/PERF_COMPARISON.md`：
+  纯协议效率不是瓶颈（换成最省的 YMODEM 也只快 1.2 秒/200KB），
+  **波特率是唯一的数量级杠杆**（实测 3.5-4.3 倍），块大小在高速下才重要。
 
 > ⚠️ **不要再引入 YMODEM**（实现已整体删除）。"任何第三方工具都能刷"这个便利性是有意
 > 放弃的 —— 换来了可读的帧格式、精确的错误定位与可扩展的命令空间，代价见设计文档「代价与风险」。

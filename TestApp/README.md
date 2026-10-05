@@ -25,6 +25,7 @@ TestApp/
     ├── test_proto.py        正常路径回归 T1-T5
     ├── test_proto_edge.py   边界与畸形输入 E1-E15
     ├── test_proto_perf.py   不同固件大小的耗时实测
+    ├── stress_iap.py        压测 S1-S12（连续升级 / 错误注入 / 幂等 / 突发 / 空闲超时）
     └── board_test.py        板端基础设施（烧写 / 复位 / 观察串口 / info）
 ```
 
@@ -51,6 +52,7 @@ python TestApp/tools/proto.py selftest                     # 只校验两端口�
 python TestApp/tools/test_proto.py                         # 一键跑 T1-T5
 python TestApp/tools/test_proto_edge.py                    # 边界与畸形输入 E1-E15
 python TestApp/tools/test_proto_perf.py --sizes 2,64,200   # 耗时实测（KB）
+python TestApp/tools/stress_iap.py --rounds 12 --slow      # 压测 S1-S12
 ```
 
 预期输出：
