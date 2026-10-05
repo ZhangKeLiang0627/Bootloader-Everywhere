@@ -20,14 +20,6 @@
 #define BL_BOOT_SIZE            (16UL * 1024UL)      // 正好一个扇区
 #endif
 
-#ifndef BL_SRAM_BASE
-#define BL_SRAM_BASE            0x20000000UL
-#endif
-
-#ifndef BL_SRAM_END
-#define BL_SRAM_END             0x20018000UL         // 96KB，不含；F405/407 改 0x20020000
-#endif
-
 #define BL_BOOT_BASE            (BL_FLASH_BASE)
 #define BL_APP_BASE             (BL_BOOT_BASE + BL_BOOT_SIZE)
 #define BL_APP_END              (BL_FLASH_BASE + BL_FLASH_SIZE)
