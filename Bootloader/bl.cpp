@@ -831,7 +831,7 @@ static uint32_t le32(const uint8_t* p) noexcept
            (static_cast<uint32_t>(p[3]) << 24);
 }
 
-// 按扇区擦除：逐个查询扇区大小，适配 F4 这类「扇区大小不等」的 Flash。
+// 按扇区擦除：查表拿每个扇区的起点和大小，适配 F4 这类「扇区大小不等」的 Flash。
 // 只擦到覆盖范围，不整片擦 —— 避免无谓的等待与寿命消耗。
 bool Session::eraseRegion(uint32_t bytes) noexcept
 {
@@ -839,13 +839,13 @@ bool Session::eraseRegion(uint32_t bytes) noexcept
     const uint32_t end = cfg_.appBase + bytes;
 
     while (addr < end) {
-        const uint32_t sectorSize = flashSectorSize(addr);
-        if (sectorSize == 0U || !ok(flashErase(addr, sectorSize))) {
+        const FlashSector* s = flashSectorAt(addr);
+        if (s == nullptr || s->base != addr || !ok(flashErase(addr, s->size))) {
             BL_LOG("[session] erase failed at 0x%08lX\r\n",
                    static_cast<unsigned long>(addr));
             return false;
         }
-        addr += sectorSize;
+        addr += s->size;
     }
     return true;
 }
@@ -1145,11 +1145,10 @@ const char* outcomeName(IapResult r) noexcept
 // 分区基址必须落在扇区边界：Flash 只能整扇区擦，差一个字节会毁邻近区
 bool partitionAligned(const char* name, uint32_t base) noexcept
 {
-    const uint32_t unit = flashSectorSize(base);
-    if (unit == 0U || flashBytesToSectorEnd(base) != unit) {
-        BL_LOG("[cfg] %s base 0x%08lX is not a sector start (sector=%lu B)\r\n",
-               name, static_cast<unsigned long>(base),
-               static_cast<unsigned long>(unit));
+    const FlashSector* s = flashSectorAt(base);
+    if (s == nullptr || s->base != base) {
+        BL_LOG("[cfg] %s base 0x%08lX is not a sector start\r\n",
+               name, static_cast<unsigned long>(base));
         return false;
     }
     return true;

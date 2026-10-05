@@ -27,7 +27,7 @@ Bootloader/            ★ 库本体，5 个文件，0 子目录
   README.md              库的唯一文档（提交机制 / 用法 / 移植 / 常见坑）
   bl.h                   对外头文件：blRun() + Status（C 工程也能 include）
   bl.cpp                 全部实现（日志/CRC/校验/YMODEM/会话/决策/入口）
-  bl_port.h              移植契约（13 个函数）
+  bl_port.h              移植契约（11 个函数 + 扇区表）
   bl_port_stm32f4.cpp    STM32F4 实现（含板级配置：串口实例 / 引脚）
   bl_config.h            分区参数 + YMODEM 参数 + 日志开关
 tools/                 开发工具（不属于库）
@@ -141,14 +141,16 @@ T4 窗口超时跳回 APP / T5 传输中断（探针验证 SP/PC 仍是 `0xFFFFF
 
 ## 6. 移植新芯片
 
-实现 `bl_port.h` 的 13 个函数：
+写 `bl_port.h` 的 11 个函数 + 一张扇区表：
 
 ```
-flashSectorSize  flashBytesToSectorEnd  flashErase  flashWrite  flashRead
+flashErase  flashWrite  flashRead
 uartRead  uartWrite  uartFlushRx
 tickMs  delayMs
 resetCause  jumpToApp
 bootPinHeld        没有按钮的平台直接 return false;
+
+kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorAt()
 ```
 
 要点：
@@ -157,11 +159,14 @@ bootPinHeld        没有按钮的平台直接 return false;
   `bl_port_<平台>.cpp` 顶部的配置区
 - `flashErase` 必须拒绝擦除 Bootloader 自身区域
 - 扇区可能不等长（F4：0-64KB 每扇区 16KB、64-128KB 一扇区 64KB、之后每扇区 128KB），
-  所以擦除要按 `flashSectorSize()` 逐个走
+  所以擦除按 `flashSectorAt()` 查表逐个走（表由 port 给，算法在 bl.cpp）
 - 迁移时改 `bl_config.h` 的 4 个数：`BL_FLASH_SIZE` / `BL_BOOT_SIZE` /
   `BL_SRAM_BASE` / `BL_SRAM_END`
 - 没有复位原因寄存器的芯片：`resetCause()` 返回 `Unknown`，那就用不了唤回窗口
   （其余功能正常）
+- port 用 HAL 收发串口（`HAL_UART_Receive/Transmit`）：需要宿主的句柄名，
+  板级配置区一行 `extern "C" UART_HandleTypeDef huart1;`。
+  换芯片时这一行也在 port 文件里改，`bl.cpp` 不用动
 
 ---
 

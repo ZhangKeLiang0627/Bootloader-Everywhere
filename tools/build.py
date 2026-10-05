@@ -65,7 +65,9 @@ LIB_SRCS = ['bl.cpp', 'bl_port_stm32f4.cpp']   # 库本体 + STM32F4 移植实�
 HAL_NEED = ['stm32f4xx_hal.c', 'stm32f4xx_hal_cortex.c', 'stm32f4xx_hal_rcc.c',
             'stm32f4xx_hal_rcc_ex.c', 'stm32f4xx_hal_gpio.c', 'stm32f4xx_hal_flash.c',
             'stm32f4xx_hal_flash_ex.c', 'stm32f4xx_hal_flash_ramfunc.c',
-            'stm32f4xx_hal_pwr.c', 'stm32f4xx_hal_pwr_ex.c']
+            'stm32f4xx_hal_pwr.c', 'stm32f4xx_hal_pwr_ex.c',
+            'stm32f4xx_hal_uart.c',   # port 用 HAL 收发串口
+            'stm32f4xx_hal_dma.c', 'stm32f4xx_hal_dma_ex.c']   # HAL_UART 里引用到
 
 # 宿主工程里必须保留的 CMSIS 文件（提供 SystemInit / SystemCoreClockUpdate）
 HOST_CMSIS = ['Core/Src/system_stm32f4xx.c']
@@ -131,12 +133,14 @@ def compile_all(chip: str, opt: str, defines: list, out: str, verbose=False):
     build(os.path.join(ROOT, 'MDK-ARM', prof['startup']), 'asm', 'startup')
 
     # 库不初始化芯片，也不带 main()。量「库本体」体积时补一个最小宿主：
-    # 这三样在真实工程里都由 CubeMX 生成（见 Core/Src）。
+    # 这几样在真实工程里都由 CubeMX 生成（见 Core/Src）。
     os.makedirs(out, exist_ok=True)
     stub = os.path.join(out, 'host_stub.c')
     with open(stub, 'w', encoding='utf-8', newline='\n') as f:
         f.write('/* 量库体积用的最小宿主，见 build.py 注释 */\n'
+                '#include "stm32f4xx_hal.h"\n'
                 '#include "bl.h"\n'
+                'UART_HandleTypeDef huart1;   /* port 用 HAL 收发，需要宿主的串口句柄 */\n'
                 'void SystemClock_Config(void) { }\n'
                 'void HAL_MspInit(void) { }\n'
                 'int main(void) { blRun(); return 0; }\n')

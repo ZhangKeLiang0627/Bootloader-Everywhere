@@ -5,8 +5,12 @@
 #include "stm32f4xx_hal.h"
 #include <cstring>
 
-// 板级配置：改这几行就能换板子。串口和按钮本身都由宿主工程初始化，这里只声明库用哪个。
-#define BL_UART_INSTANCE        USART1
+// 板级配置：改这几行就能换板子。串口和按钮都由宿主工程初始化，这里只声明库用哪个。
+//
+// 宿主的串口句柄：CubeMX 生成的 usart.h 里 extern 声明、usart.c 里定义。
+// 换了串口或改了句柄名，只改这一行。
+extern "C" UART_HandleTypeDef huart1;
+#define BL_UART_HANDLE          huart1
 
 // 硬件按钮：按住它上电 → 留在 IAP，不启动 APP。板子上没有按钮就把下面四行注释掉。
 // 宿主必须把这个脚配成「输入 + 上拉」（见 Core/Src/gpio.c 的 MX_GPIO_Init）。
@@ -19,88 +23,45 @@ namespace bl {
 
 // ② Flash 驱动
 
+// 扇区表（契约要求 port 提供，见 bl_port.h）。地址一眼可查，不用算：
+// S0-S3 各 16KB，S4 是 64KB，S5 起每个 128KB。
+// F401 512KB 到 S7；F405/F407 1MB 到 S11（按 BL_FLASH_SIZE 自动截断）。
+extern const FlashSector kFlashSectors[] = {
+    { 0x08000000U,  16U * 1024U },   // S0
+    { 0x08004000U,  16U * 1024U },   // S1
+    { 0x08008000U,  16U * 1024U },   // S2
+    { 0x0800C000U,  16U * 1024U },   // S3
+    { 0x08010000U,  64U * 1024U },   // S4  ← 只有它是 64KB
+    { 0x08020000U, 128U * 1024U },   // S5
+    { 0x08040000U, 128U * 1024U },   // S6
+    { 0x08060000U, 128U * 1024U },   // S7  ← F401 512KB 到此为止
+#if BL_FLASH_SIZE > 512U * 1024U
+    { 0x08080000U, 128U * 1024U },   // S8
+    { 0x080A0000U, 128U * 1024U },   // S9
+    { 0x080C0000U, 128U * 1024U },   // S10
+    { 0x080E0000U, 128U * 1024U },   // S11
+#endif
+};
+
+extern const uint32_t kFlashSectorCount =
+    sizeof(kFlashSectors) / sizeof(kFlashSectors[0]);
+
 namespace {
 
-// F4 扇区布局规则（扇区大小不等）
-//
-// 偏移 0     - 64KB  : S0..S3，每扇区 16KB
-// 偏移 64KB  - 128KB : S4，单扇区 64KB
-// 偏移 128KB - 末尾  : S5..，每扇区 128KB
-constexpr uint32_t kSmallSize  = 16U * 1024U;
-constexpr uint32_t kSmallCount = 4U;
-constexpr uint32_t kMidSize    = 64U * 1024U;
-constexpr uint32_t kLargeSize  = 128U * 1024U;
-
-constexpr uint32_t kMidBase   = kSmallCount * kSmallSize;    /* 64KB  */
-constexpr uint32_t kLargeBase = kMidBase + kMidSize;         /* 128KB */
-
-/** 全片扇区个数 = 5 + (容量 - 128KB) / 128KB。512KB→8，1MB→12 */
-constexpr uint32_t kSectorCount =
-    5U + (BL_FLASH_SIZE - kLargeBase) / kLargeSize;
-
-static_assert(BL_FLASH_SIZE >= (256U * 1024U),
-              "BL_FLASH_SIZE 太小：F4 至少要 256KB 才放得下 16KB Bootloader + 配置区");
-
-/** 地址相对 Flash 起始的偏移 */
-constexpr uint32_t flashOff(uint32_t addr) noexcept
-{
-    return addr - BL_FLASH_BASE;
-}
-
-/* 下面几个都写成「单个 return 表达式」而不是先声明局部变量：
- * C++11 的 constexpr 函数体只允许一条 return 语句。 */
-
-/** 地址是否落在本片 Flash 内 */
+// 地址是否落在这片 Flash 内（擦写前的范围校验）
 constexpr bool inFlash(uint32_t addr) noexcept
 {
     return addr >= BL_FLASH_BASE && addr < (BL_FLASH_BASE + BL_FLASH_SIZE);
 }
 
-/** 地址所属扇区序号；越界时返回值 >= kSectorCount */
-constexpr uint32_t sectorIndex(uint32_t addr) noexcept
+// 地址所在扇区在表里的下标（= HAL 要的扇区号）；不在表内返回 kFlashSectorCount
+uint32_t sectorIndexAt(uint32_t addr) noexcept
 {
-    return (flashOff(addr) < kMidBase)   ? (flashOff(addr) / kSmallSize) :
-           (flashOff(addr) < kLargeBase) ? kSmallCount :
-           (kSmallCount + 1U + (flashOff(addr) - kLargeBase) / kLargeSize);
-}
-
-/** 扇区起始地址 */
-constexpr uint32_t sectorBase(uint32_t idx) noexcept
-{
-    return (idx < kSmallCount)  ? (BL_FLASH_BASE + idx * kSmallSize) :
-           (idx == kSmallCount) ? (BL_FLASH_BASE + kMidBase) :
-           (BL_FLASH_BASE + kLargeBase + (idx - kSmallCount - 1U) * kLargeSize);
-}
-
-/** 扇区大小 */
-constexpr uint32_t sectorSize(uint32_t idx) noexcept
-{
-    return (idx < kSmallCount)  ? kSmallSize :
-           (idx == kSmallCount) ? kMidSize : kLargeSize;
+    const FlashSector* s = flashSectorAt(addr);
+    return (s != nullptr) ? static_cast<uint32_t>(s - kFlashSectors) : kFlashSectorCount;
 }
 
 } // namespace
-
-uint32_t flashSectorSize(uint32_t addr) noexcept
-{
-    if (!inFlash(addr)) {
-        return 0U;
-    }
-    const uint32_t idx = sectorIndex(addr);
-    return (idx < kSectorCount) ? sectorSize(idx) : 0U;
-}
-
-uint32_t flashBytesToSectorEnd(uint32_t addr) noexcept
-{
-    if (!inFlash(addr)) {
-        return 0U;
-    }
-    const uint32_t idx = sectorIndex(addr);
-    if (idx >= kSectorCount) {
-        return 0U;
-    }
-    return (sectorBase(idx) + sectorSize(idx)) - addr;
-}
 
 // 擦除
 //
@@ -124,8 +85,8 @@ Status flashErase(uint32_t addr, uint32_t len) noexcept
         return Status::BadParam;
     }
 
-    const uint32_t first = sectorIndex(addr);
-    if (first >= kSectorCount || addr != sectorBase(first)) {
+    const uint32_t first = sectorIndexAt(addr);
+    if (first >= kFlashSectorCount || kFlashSectors[first].base != addr) {
         BL_LOG("[flash] erase addr not sector-aligned: 0x%08lX\r\n",
                static_cast<unsigned long>(addr));
         return Status::BadParam;
@@ -136,12 +97,12 @@ Status flashErase(uint32_t addr, uint32_t len) noexcept
     uint32_t count     = 0;
     uint32_t cur       = addr;
     while (remaining > 0U) {
-        const uint32_t idx = sectorIndex(cur);
-        if (idx >= kSectorCount || cur != sectorBase(idx)) {
+        const uint32_t idx = sectorIndexAt(cur);
+        if (idx >= kFlashSectorCount || kFlashSectors[idx].base != cur) {
             BL_LOG("[flash] erase len not sector-multiple\r\n");
             return Status::BadParam;
         }
-        const uint32_t sz = sectorSize(idx);
+        const uint32_t sz = kFlashSectors[idx].size;
         if (remaining < sz) {
             BL_LOG("[flash] erase len not sector-multiple\r\n");
             return Status::BadParam;
@@ -238,18 +199,15 @@ Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept
     return Status::Ok;
 }
 
-// 串口收发：直接用寄存器轮询。
-// 不依赖 HAL_UART，也不持有任何句柄 —— 宿主初始化好之后，库只负责搬字节。
-namespace {
-constexpr uint32_t kLoopGuard = 200000U;    // 等标志位的兜底上限，防止硬件异常时死等
-}
-
+// 串口收发：宿主已经把 USART 配好（8N1、波特率与上位机一致），库只负责搬字节。
+// 这里用 HAL 而不是直接怼寄存器 —— port 层本来就是芯片相关的那一层，
+// 而且固件里 HAL_UART 已经链接了（宿主 usart.c 要用），没有额外负担。
 Status uartRead(uint8_t* buf, uint32_t len, uint32_t timeoutMs, uint32_t* outRead) noexcept
 {
-    uint32_t got = 0;
+    uint32_t got = 0U;
 
     if (outRead != nullptr) {
-        *outRead = 0;
+        *outRead = 0U;
     }
     if (buf == nullptr || len == 0U) {
         return Status::BadParam;
@@ -258,15 +216,14 @@ Status uartRead(uint8_t* buf, uint32_t len, uint32_t timeoutMs, uint32_t* outRea
     const uint32_t start = tickMs();
 
     while (got < len) {
-        if ((BL_UART_INSTANCE->SR & USART_SR_RXNE) != 0U) {
-            buf[got++] = static_cast<uint8_t>(BL_UART_INSTANCE->DR & 0xFFU);
-            continue;
-        }
-        if (timeoutMs == 0U) {                      // 0 = 只试一次
+        // timeoutMs 是「总超时」。每次只等 1ms 再回来查总时间，
+        // 免得单次阻塞把总超时拖过去。
+        if ((tickMs() - start) >= timeoutMs) {
             break;
         }
-        if ((tickMs() - start) >= timeoutMs) {      // timeoutMs 是「总超时」
-            break;
+        uint8_t ch = 0U;
+        if (HAL_UART_Receive(&BL_UART_HANDLE, &ch, 1U, 1U) == HAL_OK) {
+            buf[got++] = ch;
         }
     }
 
@@ -281,43 +238,33 @@ Status uartWrite(const uint8_t* buf, uint32_t len) noexcept
     if (buf == nullptr || len == 0U) {
         return Status::BadParam;
     }
-
-    for (uint32_t i = 0; i < len; ++i) {
-        uint32_t guard = 0;
-        while ((BL_UART_INSTANCE->SR & USART_SR_TXE) == 0U) {
-            if (++guard > kLoopGuard) {
-                return Status::Timeout;
-            }
-        }
-        BL_UART_INSTANCE->DR = buf[i];
+    if (len > 0xFFFFU) {                    // HAL 的 Size 是 uint16_t
+        return Status::BadParam;
     }
 
-    // 等最后一个字节移完再返回：跳转 APP 前不丢日志
-    uint32_t guard = 0;
-    while ((BL_UART_INSTANCE->SR & USART_SR_TC) == 0U) {
-        if (++guard > kLoopGuard) {
-            break;
-        }
-    }
-    return Status::Ok;
+    // 1 秒发送超时（日志行很短，正常几微秒发完）。
+    // HAL_UART_Transmit 会等到最后一个字节移完（TC）才返回 —— 跳转 APP 前不丢日志。
+    return (HAL_UART_Transmit(&BL_UART_HANDLE, buf, static_cast<uint16_t>(len),
+                              1000U) == HAL_OK) ? Status::Ok : Status::Timeout;
 }
 
 void uartFlushRx() noexcept
 {
-    // 先读 SR 再读 DR，清掉 RXNE/ORE/NE/FE/PE（F4 的清除序列）
-    volatile uint32_t scratch = BL_UART_INSTANCE->SR;
-    scratch = BL_UART_INSTANCE->DR;
-    (void)scratch;
+    // 清 RXNE / ORE / NE / FE / PE —— F4 的清除序列就是「读 SR 再读 DR」，HAL 有这个宏
+    __HAL_UART_CLEAR_PEFLAG(&BL_UART_HANDLE);
 
-    uint32_t guard = 0;
-    while ((BL_UART_INSTANCE->SR & USART_SR_RXNE) != 0U && guard++ < 4096U) {
-        (void)BL_UART_INSTANCE->DR;
+    // 把已经躺在数据寄存器里的残留字节丢掉
+    for (uint32_t guard = 0U;
+         (__HAL_UART_GET_FLAG(&BL_UART_HANDLE, UART_FLAG_RXNE) != RESET) && (guard < 4096U);
+         ++guard) {
+        (void)BL_UART_HANDLE.Instance->DR;
     }
 
-    // 关掉「接收类」中断源：宿主若开了 USART1 的 NVIC，IAP 期间的收字节
-    // 会触发中断风暴打断传输。库是轮询收的，这些中断源不需要。
-    BL_UART_INSTANCE->CR1 &= ~(USART_CR1_RXNEIE | USART_CR1_PEIE);
-    BL_UART_INSTANCE->CR3 &= ~USART_CR3_EIE;
+    // 关掉「接收类」中断源：宿主若开了 USART1 的 NVIC，IAP 期间收字节会触发
+    // 中断风暴打断传输。库是轮询收的，这些中断源不需要。
+    __HAL_UART_DISABLE_IT(&BL_UART_HANDLE, UART_IT_RXNE);
+    __HAL_UART_DISABLE_IT(&BL_UART_HANDLE, UART_IT_PE);
+    __HAL_UART_DISABLE_IT(&BL_UART_HANDLE, UART_IT_ERR);
 }
 
 // 跳转到 APP
