@@ -111,8 +111,9 @@ target/<平台>/*.cpp          ← stm32f4 有 4 个
 `bl_config.h` 会算出 `BL_APP_BASE`。APP 工程要：
 1. Keil 的 IROM1 起始 = `BL_APP_BASE`，大小 = `BL_APP_SIZE`
 2. `main()` 开头设 `SCB->VTOR = BL_APP_BASE;`
-3. 自检通过后调 `bl::app_confirm()`（见 `core/bl_meta.hpp`），
-   否则固件会停在 TESTING，启动次数到上限后被当成"跑不起来"而回滚
+3. （可选）想支持"运行中被唤回刷机"：串口收齐关键字
+   `#Bootloader-Everywhere` 后调 `bl_request_update()`（见 `bl_app.h`，
+   只依赖 CMSIS）。不需要这个功能就完全不用管
 
 ---
 
@@ -200,11 +201,12 @@ F401 / F405 / F407 / F411 / F415 / F417 共用 `target/stm32f4/`：
 现象：平时没事，一升级就把 APP 头部擦掉。`bl_entry()` 上电会检查并拒绝
 进入 IAP（宁可停留在报错，也不做可能毁数据的擦除）。
 
-**3. 看门狗比单次阻塞还短**
-现象：设备周期性重启，日志重复出现。原因：`HAL_UART_Receive` 一口气阻塞
-3 秒、整扇区擦除最坏 4 秒，而看门狗只有 2 秒。
-对策：串口等待切片成 50ms 并逐片喂狗；看门狗超时按最坏擦除时间取 6 秒
-（`BL_WATCHDOG_TIMEOUT_MS`）。
+**3. 配置区里残留旧格式/损坏槽，导致升级永远失败**
+现象：`[session] mark_download failed`，state 恒为 `INVALID`，怎么刷都进不去。
+原因：`Meta::init()` 发现"无有效槽"时把写入偏移复位为 0，但偏移 0 处其实是
+未擦除的脏数据，Flash 无法二次写入。
+对策：库已在 `init()` 里处理 —— 扫描中若越过占位槽，先擦除整片配置区再从头写。
+换芯片时若改了槽位大小 / 魔数，注意这个分支别被改写掉。
 
 **4. 栈太小**
 ST 的 CubeMX 启动文件默认给 16KB 栈 + 8KB 堆。Bootloader 用不到这么多，
@@ -215,3 +217,9 @@ ST 的 CubeMX 启动文件默认给 16KB 栈 + 8KB 堆。Bootloader 用不到这
 现象：ROM 直接超 16KB，链接报 `L6406E`。原因：链接 `vsnprintf` 会连带
 `_printf_wctomb` / `btod` / `bigflt0`（浮点格式化）一起吃进约 6.5KB。
 对策：库里自带 `core/bl_log`，只支持实际用到的格式符，开销约 2KB。
+
+**6. 复位原因判定的优先级**
+现象：APP 软复位唤回 Bootloader 时进不去窗口。原因：DAPLink 探针连着时，
+`SYSRESETREQ` 会连带置 `PINRSTF`，两个标志同时有效。
+对策：`reset_cause()` 里 `SFTRSTF` 必须排在 `POR/PIN` 之前（库里已如此）。
+换芯片时确认各家 RCC 复位标志的"同时置位"行为，必要时调整优先级。
