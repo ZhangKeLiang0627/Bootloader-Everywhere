@@ -38,14 +38,15 @@ LD = os.path.join(KEIL, 'armlink.exe')
 FE = os.path.join(KEIL, 'fromelf.exe')
 
 # ---------------------------------------------------------------------------
-# 芯片档案：与 bl_config.h 的 presets 一一对应
+# 芯片档案：只描述「这颗芯片的 Flash / SRAM 怎么切」
 #
-#   device  —— 传给编译器的 CMSIS 器件宏。bl_config.h 会据此自动挑预置，
-#              所以这里不需要再给预设任何额外宏。
-#   hse     —— 必须与预置里的 BL_HSE_HZ 一致。HAL 用 HSE_VALUE 反算系统
-#              频率，不一致会直接触发库里的编译期 #error。
-#   flash   —— 芯片 Flash 容量，用来算链接区域与分区
+#   device  —— 传给编译器的 CMSIS 器件宏
+#   startup —— 启动文件
+#   flash   —— Flash 容量，用来算链接区域与分区
 #   ram     —— SRAM 容量
+#   hse     —— 只用于 -DHSE_VALUE（宿主 system_stm32f4xx.c 需要）。
+#              库自己不配时钟，所以这个值与库无关 —— 库调用宿主的
+#              SystemClock_Config()，量体积时用空实现代替。
 # ---------------------------------------------------------------------------
 CHIPS = {
     'stm32f401xe': dict(device='STM32F401xE', startup='startup_stm32f401xe.s',
@@ -131,6 +132,15 @@ def compile_all(chip: str, opt: str, defines: list, out: str, verbose=False):
               os.path.splitext(os.path.basename(rel))[0])
 
     build(os.path.join(ROOT, 'MDK-ARM', prof['startup']), 'asm', 'startup')
+
+    # 库不配时钟，它调用宿主的 SystemClock_Config()。量「库本体」体积时给一个
+    # 空实现，免得把宿主那份 HAL 时钟代码（实测约 1.3KB）算进来。
+    os.makedirs(out, exist_ok=True)
+    stub = os.path.join(out, 'bl_clock_stub.c')
+    with open(stub, 'w', encoding='utf-8', newline='\n') as f:
+        f.write('/* 量库体积用的空时钟实现，见 build.py 注释 */\n'
+                'void SystemClock_Config(void) { }\n')
+    build(stub, 'c', 'bl_clock_stub')
 
     return objs, errs
 
