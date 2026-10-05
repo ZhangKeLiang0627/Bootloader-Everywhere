@@ -2,7 +2,8 @@
 
 串口 IAP Bootloader，可移植库。给一个 bin 就能刷进 APP 区，**任何时刻断电都不会变砖**。
 
-- 协议：自定义 0xA5 帧（见 `docs/PROTOCOL_DESIGN.md`），网页端上位机在 https://zhangkeliang0627.github.io/Bootloader-Everywhere/
+- 协议：自定义 0xA5 帧（见 `docs/PROTOCOL_DESIGN.md`）；命令行上位机 `TestApp/tools/proto.py`
+- ⚠️ 网页版上位机（`web` 分支）仍是旧的 YMODEM 实现，**与本固件不兼容**；适配版在 `web-v2` 分支
 - 库不初始化芯片，也不带 `main()` —— 芯片由宿主工程带起来，库只被 `blRun()` 调一次
 - 不依赖 stdio，不用动态内存，C++11 无异常无 RTTI
 
@@ -21,8 +22,11 @@ Bootloader/
 
 没有子目录。**要用库 = 拷这 7 个源文件**（头文件是声明，按需要拷）。
 
-`protocol.*` 是**通用载体层** —— 只依赖 `stdint.h`，不认识芯片也认识业务，
+`protocol.*` 是**通用载体层** —— 只依赖 `stdint.h`，不认识芯片也不认识业务，
 可以整对拷到 APP、上位机、别的工程里复用。改帧格式看 `protocol.*`，改升级流程看 `bl.cpp`。
+
+帧长必须落在 `[proto::kFrameMin, proto::kFrameMax]`（**7 - 1031 字节**，空载荷帧到满载荷帧）。
+`Parser` 与 `Frame::lenOk()` 都会校验：长度字段被噪声改坏时直接丢帧，让主机重传。
 
 ## 怎么用（三步）
 

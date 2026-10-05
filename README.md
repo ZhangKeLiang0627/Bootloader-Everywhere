@@ -6,6 +6,10 @@
 **在线刷机页：<https://zhangkeliang0627.github.io/Bootloader-Everywhere/>**
 （Chrome / Edge，用 Web Serial，不装任何软件）
 
+> ⚠️ 在线页当前是**旧协议（YMODEM）**版本，只对 `main` / `test-app` 上的固件有效。
+> `protocol-v2` 分支换了新协议（0xA5 帧），**网页版刷不了它** —— 那一版用
+> `TestApp/tools/proto.py` 刷机，网页适配在 `web-v2` 分支进行中。
+
 ---
 
 ## 一句话说明它怎么工作
@@ -38,7 +42,7 @@
 ## 仓库里有什么
 
 ```
-Bootloader/        ★ 就是这个库，6 个源文件，没有子目录
+Bootloader/        ★ 就是这个库，7 个源文件，没有子目录
 tools/             开发工具：编译量体积（build.py）、板端操作（board.py）
 AGENTS.md          给接手的人 / AI 的完整说明
 USER.md            给使用者的快速上手
@@ -54,10 +58,21 @@ build/             编译产物
 
 ---
 
-## 三个分支
+## 分支
 
-| 分支 | 内容 |
-|---|---|
-| `main` | 库 + STM32F401 示例工程（当前） |
-| `test-app` | 库 + 测试 APP + 测试脚本（`TestApp/`） |
-| `web` | 网页上位机（`docs/`），push 后 GitHub Pages 自动重建 |
+| 分支 | 内容 | 协议 |
+|---|---|---|
+| `main` | 库 + STM32F401 示例工程 | YMODEM |
+| `test-app` | 库 + 测试 APP + 测试脚本（`TestApp/`） | YMODEM |
+| `web` | 网页上位机（`docs/`），push 后 GitHub Pages 自动重建 | YMODEM |
+| `protocol-v2` | **新协议开发分支**：0xA5 帧 + 中断接收 + IAP 命令层，真板 T1-T5 已过 | 0xA5 帧 |
+| `web-v2` | 从 `web` 拉出，把网页上位机适配到新协议 | 0xA5 帧 |
+
+`protocol-v2` 尚未合回 `main` / `test-app`；两套协议互不兼容（帧格式与上位机都不同）。
+
+| | YMODEM（`main` 等） | 0xA5 帧（`protocol-v2`） |
+|---|---|---|
+| 协议层代码 | 508 行 / 1038 B | **载体层 240 行，零依赖可复用** |
+| 整份固件 ROM | 13120 B | **11160 B** |
+| 上位机 | 网页（Web Serial） | `proto.py`（网页适配中） |
+| 优点 | 任何第三方串口工具都能刷 | 帧格式可读、错误码精确、可断点续传 |

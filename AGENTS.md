@@ -259,7 +259,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 `@` 后接 `update` / `add` / `fix` / `refactor` / `feat` / `delete` 等；
 署名行前空一行。git 身份用 `kkl / 1184665829@qq.com`。
 
-三分支改动要一起同步（`main` / `test-app` / `web`），文档改动尤其别漏。
+分支改动要一起同步（`main` / `test-app` / `web`），文档改动尤其别漏。
+新协议在 `protocol-v2` 上开发，网页适配在 `web-v2` —— **两套协议互不兼容**，
+别把协议相关的改动混着同步过去。
 
 ---
 
@@ -274,6 +276,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   → `END`。16 个错误码见设计文档 §0.5.7。
 - **DATA 一应一答**；**先校验后写入**（Flash 只能 1→0，先写坏就要整扇区擦除才能纠正）；
   写后**读回 Flash 重算 CRC32**（只对收到的字节累加与主机算的必然相同，没有信息量）。
+- **帧长自检**：帧长必须落在 `[proto::kFrameMin, proto::kFrameMax]`（7 - 1031）。
+  `Parser` 与 `readFrame()` 都会校验，长度可疑的帧直接丢、让主机重传。
 - 传输层**中断接收**：`uartRxIrqHandler` + 512 B 环形缓冲，寄存器实现，不用 HAL_UART。
   宿主只需在 `USART1_IRQHandler` 里调 `blUartRx()`，**不要**再调 `HAL_UART_IRQHandler`。
 - 上位机 `TestApp/tools/proto.py`；板端回归 `TestApp/tools/test_proto.py`（T1-T5）。
@@ -281,3 +285,21 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 > ⚠️ **不要再引入 YMODEM**（实现已整体删除）。"任何第三方工具都能刷"这个便利性是有意
 > 放弃的 —— 换来了可读的帧格式、精确的错误定位与可扩展的命令空间，代价见设计文档「代价与风险」。
 
+---
+
+## 11. 分支拓扑与合并状态（2026-10-06）
+
+```
+main          库 + STM32F401 示例工程（YMODEM 协议）
+test-app      库 + TestApp/ 测试 APP 与脚本（YMODEM）—— 上板验证都在这个分支做
+web           docs/ 网页上位机（YMODEM），GitHub Pages 从这里发布
+protocol-v2   ★ 新协议（0xA5 帧）：载体层 + IAP 命令层 + 中断接收，真板 T1-T5 已过
+web-v2        从 web 拉出，把网页适配到新协议（进行中）
+```
+
+**两套协议互不兼容**：`protocol-v2` 的固件只能被 `proto.py` / `web-v2` 刷，
+`main` 等分支的固件只能被旧网页刷。别把协议改动直接同步过去。
+
+- `protocol-v2` 合回 `main` / `test-app` 之前，先确认 `web-v2` 能用（否则线上刷机页会失效）
+- 协议层改动要同步三处实现：固件 `protocol.cpp`、上位机 `proto.py`、网页 `web-v2` ——
+  三处的 `selftest` 必须给出相同的向量结果
