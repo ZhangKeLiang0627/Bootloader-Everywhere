@@ -66,13 +66,13 @@ APP、还是留在原地等新的固件。
 **只有一件可选的事**：想支持"网页一键刷机"，就在串口收齐关键字后软复位。
 
 ```c
-#include "bl_app.h"        /* 只依赖 CMSIS，不依赖本库其它文件 */
+#include "bl.h"            /* 只用到 bl_request_update，零依赖 */
 
 /* 在你的串口接收处理里，逐字节匹配关键字，匹配完整后调用： */
 bl_request_update();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
 ```
 
-样板见 `test-app` 分支的 `TestApp/app_main.c`（纯寄存器实现，连 CMSIS 都不用）。
+样板见 `TestApp/app_main.c`（test-app 分支，纯寄存器实现）。
 **不需要**做什么"确认"、"喂狗"之类的动作 —— 本 Bootloader 不要这些。
 
 ---
@@ -91,13 +91,18 @@ bl_request_update();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
 
 | 工具 | 位置 | 用途 |
 |---|---|---|
+| **库本体（只需这 6 个文件）** | `Bootloader/` | bl.h / bl.cpp / bl_port.h / bl_port_stm32f4.cpp / bl_config.h / README.md |
+| 库文档（含移植指南） | `Bootloader/README.md` | 怎么用、怎么移植、常见坑 |
 | 网页上位机 | `docs/`（web 分支） | 浏览器刷机，已上线 |
-| 命令行构建 | `Bootloader/tools/build.py` | 编译 + 量 ROM + 导出 bin/hex |
-| 板端工具 | `Bootloader/tools/board.py` | 备份/烧写/擦除/看串口 |
-| 测试固件编译 | `TestApp/build_app.py` | 编正常/故障测试固件 |
+| 命令行构建 | `tools/build.py` | 编译 + 量 ROM + 导出 bin/hex |
+| 板端工具 | `tools/board.py` | 备份/烧写/擦除/看串口 |
+| 测试固件编译 | `TestApp/build_app.py` | 编正常/故障测试固件（test-app 分支） |
 | 自动化测试 | `TestApp/tools/test_auto.py` | 一键跑升级/唤回/断流测试 |
 | 断电测试引导 | `TestApp/tools/power_test.py` | 提示你拔电的断电暴力测试 |
-| 移植指南 | `Bootloader/docs/PORTING.md` | 换芯片怎么移植 |
+| 历史资料 | `docs/HISTORY.md` | 立项期测试方案与调研（不代表当前实现） |
+
+> **移植到别的工程时，只拷 `Bootloader/` 这一个目录就够** —— 仓库里的
+> `Core/ Drivers/ MDK-ARM/` 只是 STM32F401 的示例工程。
 
 ---
 
@@ -105,7 +110,7 @@ bl_request_update();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
 
 | 分支 | 是什么 |
 |---|---|
-| `main` | Bootloader 库 + STM32F401 工程 |
+| `main` | Bootloader 库 + STM32F401 示例工程 |
 | `test-app` | 库 + 测试 APP + 测试脚本 |
 | `web` | 网页上位机（改完 push 自动更新线上页面） |
 
@@ -121,10 +126,10 @@ UV4 -r MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o build.log
 UV4 -f MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o flash.log
 
 # 命令行量 ROM（不打开 Keil）
-python Bootloader/tools/build.py
+python tools/build.py
 
 # 看板子串口
-python Bootloader/tools/board.py monitor
+python tools/board.py monitor
 
 # 编译测试固件（在 test-app 分支）
 python TestApp/build_app.py --fail 0
