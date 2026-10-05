@@ -171,6 +171,8 @@ resetCause  jumpToApp
 | `blRequestUpdate` / `BL_BOOT_MAGIC_STRING`（库内） | APP 侧接口不进库，示例放 `USER.md` |
 | `FwState` / `IapResult::NoSpace` / `ResetCause::BrownOut,LowPower` | 不再使用 |
 | 文件头大块注释 + 三行分节 banner | 用户要求：改成单行 `//` 标题 |
+| 启动时整镜像 CRC（需存 size/crc32） | 用户明确决定：**只在烧录末尾回读校验**就够，
+  不为它保留存储（漏掉的只是刷完之后才发生的 Flash 位翻转） |
 
 ---
 
