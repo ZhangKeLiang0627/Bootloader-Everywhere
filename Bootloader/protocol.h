@@ -23,6 +23,11 @@ constexpr uint32_t kDataMax  = 1024U;              // Data 区上限
 constexpr uint32_t kOverhead = 7U;                 // 头1 + ID1 + CMD1 + len2 + CRC1 + 尾1
 constexpr uint32_t kFrameMax = kOverhead + kDataMax;
 
+// 最小帧长 = DataLen 为 0 的空载荷帧（END / STATUS 这类无数据命令）。
+// 帧长必须落在 [kFrameMin, kFrameMax]：长度字段被噪声改小或改大时，
+// 收下的帧宁可丢掉让主机重传，也不要拿着一个长度可疑的帧往下走。
+constexpr uint32_t kFrameMin = kOverhead;
+
 // 小端读写。帧内字段偏移不保证 4 字节对齐，不能直接做指针转换
 // （Cortex-M4 容忍非对齐访问，M0 会 HardFault）。
 inline uint16_t getLe16(const uint8_t* p) noexcept
@@ -67,6 +72,12 @@ struct Frame {
 
     bool    isReply() const noexcept { return (cmd & kDirReply) != 0U; }
     uint8_t code() const noexcept { return static_cast<uint8_t>(cmd & ~kDirReply); }
+
+    uint32_t totalLen() const noexcept { return kOverhead + len; }
+
+    // 帧到来时的长度自检。结构上 Parser 已经保证（按 len 收满才可能走到帧尾），
+    // 这里再暴露一次给调用方当第二道防线：帧结构以外的改动出错时能立刻兜住。
+    bool lenOk() const noexcept { return totalLen() >= kFrameMin && totalLen() <= kFrameMax; }
 };
 
 // 组帧到 out（容量需 len + kOverhead）。返回整帧长度；0 = 参数非法或容量不足。

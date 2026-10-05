@@ -121,7 +121,9 @@ bool Parser::feed(uint8_t byte, Frame& out) noexcept
             if (byte != kTail) {
                 continue;                  // 帧尾错：整帧丢弃，重新找帧头
             }
-            return true;
+            // 帧长必须落在 [kFrameMin, kFrameMax]。走到这里结构上必然满足，
+            // 保留为显式契约：若将来改动状态机（变长头部、新增字段），这里会立刻兜住。
+            return (static_cast<uint32_t>(out.len) + kOverhead) >= kFrameMin;
         }
     }
     return false;

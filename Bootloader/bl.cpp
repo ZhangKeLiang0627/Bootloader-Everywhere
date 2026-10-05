@@ -431,6 +431,11 @@ bool Session::readFrame(uint32_t timeoutMs) noexcept
         const Status st = uartRead(&b, 1U, BL_READ_SLICE_MS, &got);
 
         if (got == 1U && parser_.feed(b, frame_)) {
+            // 一帧到来了，先过长度自检：帧长必须在 [kFrameMin, kFrameMax] 内。
+            // 解析器已保证，这里是第二道防线 —— 长度可疑的帧直接丢，让主机重传。
+            if (!frame_.lenOk()) {
+                continue;
+            }
             return true;
         }
         if (st != Status::Ok && st != Status::Timeout) {

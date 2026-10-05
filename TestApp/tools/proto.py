@@ -27,6 +27,8 @@ TAIL = 0x03
 DIR_REPLY = 0x80
 DATA_MAX = 1024
 OVERHEAD = 7
+FRAME_MIN = OVERHEAD        # 最小帧长 = 空载荷帧（END / STATUS）
+FRAME_MAX = OVERHEAD + DATA_MAX
 
 CMD_START = 0x01
 CMD_DATA = 0x02
@@ -130,8 +132,12 @@ class Parser:
             self.st = 'head'
             if byte != TAIL:
                 continue
+            total = OVERHEAD + self.n
+            if not (FRAME_MIN <= total <= FRAME_MAX):
+                return None          # 一帧到来时的长度自检：越界就丢，让主机重传
             return {'id': self.fid, 'cmd': self.cmd, 'code': self.cmd & ~DIR_REPLY,
-                    'reply': bool(self.cmd & DIR_REPLY), 'data': bytes(self.buf)}
+                    'reply': bool(self.cmd & DIR_REPLY), 'data': bytes(self.buf),
+                    'total': total}
 
         return None
 
@@ -324,6 +330,8 @@ def selftest(_args):
     eq(encode(0x01, 0x02, bytes([0x34, 0x12])),
        bytes([0xA5, 0x01, 0x02, 0x02, 0x00, 0x34, 0x12, 0x12, 0x03]), "示例帧字节")
     eq(len(encode(0x01, 0x04, b"")), OVERHEAD, "空载荷帧长")
+    eq(FRAME_MIN, 7, "FRAME_MIN")
+    eq(FRAME_MAX, 1031, "FRAME_MAX")
 
     # 解析 + 重同步
     good = encode(0x01, 0x02, bytes([0x34, 0x12]))
@@ -354,6 +362,28 @@ def selftest(_args):
         if r:
             got = r
     eq(got is not None and got['data'] == big, True, "载荷含 A5/03 可解析")
+
+    # 帧长自检：空载荷帧 total 应等于下限；len 被改大到越界的帧应被丢弃
+    f_empty = None
+    p = Parser()
+    for b in encode(0x01, 0x04, b""):
+        r = p.feed(b)
+        if r:
+            f_empty = r
+    eq(None if f_empty is None else f_empty['total'], FRAME_MIN, "空载荷帧 total = FRAME_MIN")
+
+    manual = bytearray(encode(0x01, 0x02, bytes([0x5A]) * 8))
+    manual[3] = 0xFF          # len 低字节
+    manual[4] = 0x7F          # len 高字节 → 0x7FFF，远超 DATA_MAX
+    p = Parser()
+    hit = any(p.feed(b) for b in bytes(manual))
+    eq(hit, False, "len 越界的帧被丢弃")
+
+    crafted = bytearray([0xA5, 0x01, 0x02, 0xFF, 0x04, 0, 0x03])   # len=1279 但只有 1 字节
+    crafted[5] = crc8(crafted[1:5])                                # 让 CRC 自洽
+    p = Parser()
+    hit = any(p.feed(b) for b in bytes(crafted))
+    eq(hit, False, "len 越界但 CRC 自洽的帧仍被丢弃")
 
     print("=== Python 侧载体层自检 ===")
     if fails:

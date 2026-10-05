@@ -172,6 +172,61 @@ static void testParser(void)
     check(!feedAll(p5, over, sizeof(over), f), "长度越界的帧被拒绝");
 }
 
+// 帧长自检：最小/最大边界，以及 len 字段被改的情况
+static void testFrameLen(void)
+{
+    printf("[6] 帧长范围自检\n");
+    static proto::Frame f;
+    uint8_t buf[proto::kFrameMax];
+
+    checkEq(proto::kFrameMin, 7U, "kFrameMin = 7（空载荷帧）");
+    checkEq(proto::kFrameMax, 1031U, "kFrameMax = 1031");
+
+    // 空载荷帧（END / STATUS 这类）：长度正好等于下限
+    uint32_t n = proto::encode(0x01U, 0x03U, nullptr, 0U, buf, sizeof(buf));
+    proto::Parser p;
+    p.reset();
+    check(feedAll(p, buf, n, f), "空载荷帧可解析");
+    checkEq(f.totalLen(), proto::kFrameMin, "空载荷帧 totalLen = kFrameMin");
+    check(f.lenOk(), "空载荷帧 lenOk");
+
+    // 满载荷帧：长度正好等于上限
+    uint8_t big[proto::kDataMax];
+    memset(big, 0x5AU, sizeof(big));
+    n = proto::encode(0x01U, 0x02U, big, proto::kDataMax, buf, sizeof(buf));
+    p.reset();
+    check(feedAll(p, buf, n, f), "满载荷帧可解析");
+    checkEq(f.totalLen(), proto::kFrameMax, "满载荷帧 totalLen = kFrameMax");
+    check(f.lenOk(), "满载荷帧 lenOk");
+
+    // len 字段被噪声改大（超出 Data 区）→ 解析器直接丢帧，绝不会把它当合法帧交出去
+    uint8_t over[16];
+    uint32_t m = proto::encode(0x01U, 0x02U, big, 8U, over, sizeof(over));
+    over[3] = 0xFFU;                        // len 低字节改成 255（CRC 也随之不匹配）
+    over[4] = 0x7FU;                        // len 高字节 0x7F → len = 0x7FFF
+    p.reset();
+    check(!feedAll(p, over, m, f), "len 被改大到 0x7FFF 的帧被丢弃");
+
+    // 构造一个 len 字段与 CRC 自洽、但总长越界的帧：CRC 重算让它「看起来合法」，
+    // 唯一的拦截点就是长度自检本身
+    uint8_t crafted[8];
+    crafted[0] = 0xA5U;
+    crafted[1] = 0x01U;
+    crafted[2] = 0x02U;
+    crafted[3] = 0xFFU;                     // len = 0x04FF = 1279 > kDataMax
+    crafted[4] = 0x04U;
+    crafted[5] = proto::crc8(&crafted[1], 4U);
+    crafted[6] = 0x03U;                     // 谎报的帧尾（真帧尾其实在 5+len 处）
+    p.reset();
+    check(!feedAll(p, crafted, 7U, f), "len 越界但 CRC 自洽的帧仍被丢弃");
+
+    proto::Frame manual{};
+    manual.len = 2000U;
+    check(!manual.lenOk(), "手工构造 len=2000 的 Frame::lenOk 为假");
+    manual.len = 0U;
+    check(manual.lenOk(), "len=0 的 Frame::lenOk 为真");
+}
+
 static void testParserSplit(void)
 {
     printf("[5] 逐字节喂入（模拟串口）\n");
@@ -204,6 +259,7 @@ int main(void)
     testEncode();
     testParser();
     testParserSplit();
+    testFrameLen();
 
     printf("\n%d 项断言，%d 项失败 → %s\n", gCase, gFail, gFail == 0 ? "PASS" : "FAIL");
     return gFail == 0 ? 0 : 1;
