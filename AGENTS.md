@@ -7,11 +7,17 @@
 
 ## 1. 这是什么
 
-**LUMOS-bootloader** 是一个 STM32 串口 IAP Bootloader，核心卖点是**「防变砖」**：
+**LUMOS-bootloader** 是一个可移植的串口 IAP Bootloader：
 
-- 通过 YMODEM-1K 串口协议刷固件
-- 用「看门狗自确认 + 回滚」机制，自动识别并回退「能过 CRC 校验、但一跑就崩」的坏固件
+- 通过 YMODEM-1K 串口协议刷固件，写入 APP 区 → 校验 → 跳转
+- **软件复位唤回**：APP 运行中收到关键字 `#Bootloader-Everywhere` 即软复位，
+  Bootloader 靠复位原因识别并开一个 15s 限时升级窗口
 - 提供网页版上位机（Web Serial），有网 + Chrome 就能刷机，无需装任何软件
+- 零依赖、跨芯片：同一份 `Bootloader/` 目录拷到任何 Cortex-M 工程都能用
+
+**明确的设计取向（2026-10-05 起）**：**不做自动回滚、不用看门狗**。
+IAP 是人站在板子前面刷的，不是 OTA；刷进坏固件就重新刷一次，不为此
+增加复杂度与运行期副作用（这是与用户确认后的决策，不要再"好心"加回来）。
 
 GitHub 仓库：`ZhangKeLiang0627/Bootloader-Everywhere`（public）
 网页地址：**https://zhangkeliang0627.github.io/Bootloader-Everywhere/**
@@ -38,13 +44,13 @@ GitHub 仓库：`ZhangKeLiang0627/Bootloader-Everywhere`（public）
 ```
 LUMOS-bootloader/
 ├── Bootloader/                 # ★ 可搬走的库（唯一要理解的部分）
-│   ├── bl_config.h             # ★ 唯一配置面：芯片/分区/看门狗/通信，移植只改这里
+│   ├── bl_config.h             # ★ 唯一配置面：芯片/分区/通信，移植只改这里
 │   ├── bl_app.h                # APP 侧最小接口（软复位唤回 + 关键字常量）
 │   ├── bl.hpp                  # 库统一入口头文件
 │   ├── app/bl_entry.cpp        # 主流程入口（平台初始化→决策→IAP 循环）
 │   ├── core/                   # 平台无关核心（一行不碰芯片寄存器/HAL）
 │   │   ├── bl_boot.cpp/hpp     #   启动决策 decide()
-│   │   ├── bl_meta.cpp/hpp     #   配置区（槽位/状态/计数/commit）
+│   │   ├── bl_meta.cpp/hpp     #   配置区（槽位/状态/commit）
 │   │   ├── bl_session.cpp/hpp  #   升级会话（擦除→写→commit 原子化）
 │   │   ├── bl_ymodem.cpp/hpp   #   YMODEM-1K 接收端
 │   │   ├── bl_verify.cpp/hpp   #   向量表/整镜像 CRC 校验
@@ -52,7 +58,7 @@ LUMOS-bootloader/
 │   │   ├── bl_log.cpp/hpp      #   精简日志（禁用 printf，省 ROM）
 │   │   └── bl_types.hpp        #   Status/IapResult/FwState/ResetCause 枚举
 │   ├── port/                   # ★ 移植层接口（唯一分界线）
-│   │   ├── bl_port.hpp         #   19 个抽象函数（擦除/读串口/延时/喂狗…）
+│   │   ├── bl_port.hpp         #   16 个抽象函数（flash×5 / uart×4 / 跳转 / 时基 / 复位原因…）
 │   │   └── bl_port_template.cpp#   移植模板（复制到 target/ 后逐项填）
 │   ├── target/stm32f4/         # STM32F4 具体实现（4 个 cpp + config）
 │   ├── presets/                # 芯片预设（纯数字，无代码）
@@ -72,9 +78,9 @@ LUMOS-bootloader/
 ```
 
 **分层铁律**（守不住库就废了）：
-1. `core/` 不得包含任何芯片头文件，只调 `port/bl_port.hpp` 的 19 个函数
+1. `core/` 不得包含任何芯片头文件，只调 `port/bl_port.hpp` 的 16 个函数
 2. `core/` 不得假设 Flash 按扇区擦，只调 `flash_erase(addr,len)` / `flash_sector_size(addr)`
-3. `app/` 不得直接调厂商库，延时用 `bl::delay_ms()`，复位用 `bl::system_reset()`
+3. `app/` 不得直接调厂商库，延时用 `bl::delay_ms()`
 
 ---
 
@@ -99,47 +105,56 @@ APP 固件的起始地址 = `BL_APP_BASE` = **0x08004000**（网页上会提醒�
 判定顺序（顺序本身是安全设计的一部分）：
 
 ```
-1. APP 配置区请求升级？            → 进 IAP
-2. 固件状态可跳转？               → 否（Invalid/Download/Revoked）进 IAP
-3. 软件复位 + Valid 态？          → 进「15s 限时窗口」（APP 唤回主通道）
-4. Backdoor 时间窗触发？          → 进 IAP（默认关闭，向后兼容）
-5. Testing 态？                   → 按复位原因判定（自确认机制，见下）
-6. 向量表合法？                   → 否作废进 IAP
-7. 整镜像 CRC32 匹配？            → 否作废进 IAP
-8. 全部通过                       → 跳转 APP
+1. 固件状态可跳转？          → 否（Invalid / Download）进 IAP，无限等待
+2. 软件复位 + Valid 态？     → 进「15s 限时窗口」（APP 唤回主通道）
+3. 向量表合法？              → 否进 IAP
+4. 整镜像 CRC32 匹配？       → 否进 IAP
+5. 全部通过                  → 跳转 APP
 ```
 
-**复位原因在每次启动必读**（read-and-clear 语义）：`RCC_CSR` 的复位标志是累积的，只有读才清。只在 Testing 分支读会导致 Valid 启动从不清标志，下次升级读到陈年旧账被误判（实测症状：坏固件每 6 秒看门狗复位，但 state 恒为 VALID、attempts 恒 0）。
+第 3 步限定 `state==Valid` 是必须的：**升级完成后 Bootloader 自己也会软复位**
+（旧版本如此；现在改为直接 `Boot::jump`，见 §6.3），若不加限定，固件
+Download 态下的软复位也会被当成"APP 唤回"而误进窗口。
+
+**复位原因每次启动必读**（read-and-clear 语义）：`RCC_CSR` 的复位标志是
+累积的，只有读才清。漏读会让标志粘住，下一次启动被误判。
 
 ---
 
-## 6. 防变砖机制（本项目的核心价值）
+## 6. 状态机与升级的原子提交
 
-### 6.1 自确认（`BL_BOOT_SELF_CONFIRM=1`，默认）
+### 6.1 固件状态机
 
-不要求 APP 主动调任何确认接口。Bootloader 靠**复位原因**客观判断 APP 上一次活没活下来：
+```
+Invalid ──(mark_download)──► Download ──(commit)──► Valid
+```
 
-- **看门狗复位** → APP 没喂狗（跑飞/卡死/一启动就崩）→ 计数 +1，超限回滚
-- **上电/按复位** → APP 上次活下来了 → 自动转 Valid
+- `Invalid`：配置区空 / 无有效记录 → 不可跳转，进 IAP
+- `Download`：正在写、或写到一半掉电 → 不可跳转，进 IAP 可重刷
+- `Valid`：写入完成且校验通过 → 可跳转
 
-关键判据 `attempts == 0` ⇔ 新固件刚写入一次都还没跑过（`commit()` 会清零 attempts）。这个判据不依赖复位原因的准确性，稳得多（详见 `bl_boot.cpp` 第 5 步注释，有探针拖 PIN 复位的踩坑记录）。
+没有 Testing / Revoked 两个中间态 —— 那两个是旧版"自确认 + 回滚"机制的
+产物，已删除。
 
-### 6.2 回滚
+### 6.2 升级的原子提交（`core/bl_session.cpp`）
 
-Testing 态下连续 `BL_BOOT_MAX_ATTEMPTS`（默认 3）次看门狗复位 → `revoke()` 作废 → 进 IAP。挡住的正是「CRC 全对、一跑就崩」最难防的一类坏固件。
+顺序不可颠倒，否则中途掉电会留下"状态可跳转但 APP 已擦空"的组合：
 
-### 6.3 升级的原子提交（`core/bl_session.cpp`）
-
-顺序不可颠倒，否则中途掉电会变砖：
 ```
 ① meta.mark_download()  → 置 Download（不可信）
 ② 擦除 APP 区所需扇区
 ③ 接收 YMODEM 并写入
 ④ 边收边算整镜像 CRC32
-⑤ meta.commit()         → 置 Testing，记录 size/crc32
+⑤ meta.commit()         → 置 Valid，记录 size / crc32 / 版本
 ```
 
-①必须在②前（否则「状态 Valid 但 APP 已擦空」→ 上电跳空片变砖）。
+①必须在②之前。
+
+### 6.3 升级完成后直接跳转
+
+`app/bl_entry.cpp` 在 `outcome==Done` 后**直接 `Boot::jump()`** 跳新固件，
+不再 `system_reset()` 重新走一遍决策。这样只有一条跳转路径，也不再有
+"升级完成的软复位"与"APP 唤回软复位"的语义冲突。
 
 ---
 
@@ -155,9 +170,9 @@ Testing 态下连续 `BL_BOOT_MAX_ATTEMPTS`（默认 3）次看门狗复位 → 
 5. 正常上电/硬件复位零等待直接跳 APP
 
 **关键点**：
-- `core/bl_boot.cpp` 第 3 步：`cause==Software && state==Valid` 才进窗口。限定 Valid 是因为**升级完成后 Bootloader 自己也会软复位**（那时状态是 Testing），不限定会把升级后的复位误当唤回，导致永远跳不进新固件。
-- `core/bl_ymodem.cpp`：握手总超时 `handshake_timeout_ms`（默认 15s，`BL_YMODEM_HANDSHAKE_MS`）。握手阶段没等到首包就 `Status::Timeout`。
-- `app/bl_entry.cpp`：限时窗口超时（`Failed + Timeout + fw_size==0`）→ `Boot::jump()` 跳回 APP。
+- `core/bl_boot.cpp` 第 2 步：`cause==Software && state==Valid` 才进窗口
+- `core/bl_ymodem.cpp`：握手总超时 `handshake_timeout_ms`（默认 15s，`BL_YMODEM_HANDSHAKE_MS`）。握手阶段没等到首包就 `Status::Timeout`；`=0` 表示关闭（无限等）
+- `app/bl_entry.cpp`：限时窗口超时（`Failed + Timeout + fw_size==0`）→ `Boot::jump()` 跳回 APP
 
 ### ⚠️ 复位原因的一个大坑（探针拖 PIN 复位）
 
@@ -169,19 +184,22 @@ Testing 态下连续 `BL_BOOT_MAX_ATTEMPTS`（默认 3）次看门狗复位 → 
 
 ---
 
-## 8. 看门狗（用户最容易踩的坑）
+## 8. 已删除的机制（不要加回来）
 
-- `BL_USE_WATCHDOG=1`（默认）：Bootloader 上电 `wdg_init()` 启动 IWDG
-- **IWDG 一旦启动无法停止**（只能靠复位），跳转 APP 时**不停也不喂**
-- `BL_WATCHDOG_TIMEOUT_MS=6000`（默认 6s，必须大于最坏的单次扇区擦除 ≈4s）
+以下东西在 2026-10-05 按用户要求**整体删除**，本仓库不应再出现：
 
-**因此 APP 必须喂狗**（写 `IWDG_KR = 0xAAAA`），否则：
-- Testing 态：被当成「跑飞」→ 计数 → 约 4 次（24s）后回滚
-- Valid 态：直接跳回 APP，但 APP 不喂狗 → 6s 一次无限重启
+| 已删除 | 原因 |
+|---|---|
+| 看门狗 IWDG（`BL_USE_WATCHDOG` / `wdg_init` / `wdg_feed`） | IWDG 一旦启动无法停止，会强迫所有 APP 必须喂狗；对 IAP 场景是纯负担 |
+| 自确认（`BL_BOOT_SELF_CONFIRM`）与回滚（`BL_BOOT_MAX_ATTEMPTS` / `revoke`） | 依赖看门狗复位作判据；且 IAP 是人在场操作，不需要自动回滚 |
+| `FwState::Testing` / `FwState::Revoked`、`boot_attempts`、`confirm_app()` | 上面两项的配套状态 |
+| Backdoor 时间窗（`wait_backdoor` / `BL_BACKDOOR_WINDOW_MS`） | 已被「软件复位唤回 + 15s 窗口」取代 |
+| 配置区请求升级（`request_update` / `kFlagUpdateReq`） | 无调用点，被关键字唤回取代 |
+| `uart_set_baudrate` / `console_uart` / `system_reset` / `IapResult::Running` | 预留但从未使用的死代码 |
 
-**APP 不需要初始化看门狗**（IWDG 已被 bootloader 启动），只需喂狗。喂狗的纯寄存器样板在 `test-app` 分支的 `TestApp/app_main.c` 的 `iwdg_init()` / `iwdg_feed()`。
-
-**如果 APP 就是不想喂狗**：把 `BL_USE_WATCHDOG=0` 且 `BL_BOOT_SELF_CONFIRM=0`（关掉自确认），代价是失去「能过校验却一跑就崩」的自动回滚。
+**如果 APP 不喂狗会不会被 Bootloader 反复复位？** 不会 —— 已经没有看门狗了。
+坏固件（能过 CRC 但一跑就崩）刷进去后设备会卡住，需要人工重新上电进 IAP 再刷。
+这是明确接受的取舍。
 
 ---
 
@@ -213,7 +231,7 @@ python Bootloader/tools/build.py --all           # 逐个芯片跑，对比 ROM 
 
 ```bash
 python TestApp/build_app.py --fail 0   # 正常固件 app_test.bin
-python TestApp/build_app.py --fail 1   # 不喂狗 app_fail1.bin
+python TestApp/build_app.py --fail 1   # 挂死     app_fail1.bin
 python TestApp/build_app.py --fail 2   # HardFault app_fail2.bin
 ```
 
@@ -258,7 +276,7 @@ python tools/board.py flash build/bl_f401.bin
 1. **拷目录**：整个 `Bootloader/` 拷进目标工程，只需一个 include 路径 `-I <工程>/Bootloader`
 2. **选芯片**：`bl_config.h` 第一节三选一 —— A. 复用 HAL 的 CMSIS 器件宏（推荐，什么都不用做）/ B. 取消 `#include "presets/xxx.h"` 注释 / C. 没有预置就照格式自己写或填「手填区」（`BL_FLASH_SIZE`/`BL_SRAM_END`/时钟参数）。填漏编译报错，不会带错值上板
 3. **加编译 + 接入口**：加入编译 17 个文件（core 7 个 + app 1 个 + target 若干，见 PORTING.md 清单）；**不要**编译 `port/bl_port_template.cpp`；入口用库自带 `main()` 或设 `BL_PROVIDE_MAIN=0` 接自己 main
-4. **告诉 APP 侧**：APP 工程 IROM1 起始 = `BL_APP_BASE`，`main()` 开头 `SCB->VTOR = BL_APP_BASE`，自检通过调 `bl::app_confirm()`
+4. **告诉 APP 侧**：APP 工程 IROM1 起始 = `BL_APP_BASE`，`main()` 开头 `SCB->VTOR = BL_APP_BASE`；若要支持"运行中被唤回"，串口收齐关键字 `#Bootloader-Everywhere` 后调 `bl_request_update()`（见 `bl_app.h`，只依赖 CMSIS）
 
 ### 两类移植
 
@@ -275,11 +293,13 @@ python tools/board.py flash build/bl_f401.bin
 
 | 脚本 | 作用 |
 |---|---|
-| `test_auto.py` | 一键跑 T1-T5，逐项判定 PASS/FAIL（fail2 回滚、自确认、fail1 回滚、连续升级 x5、传输中断） |
+| `test_auto.py` | 一键跑 T1-T5，逐项判定 PASS/FAIL（正常升级 / 连续升级 x5 / 软件复位唤回 / 窗口超时跳回 APP / 传输中断不变砖） |
 | `verify_window.py` | 验证「软件复位唤回 + 15s 窗口」链路 |
 | `power_test.py --phase N` | 断电暴力测试引导（5 个断电机时，用户手动拔电配合） |
 | `board_test.py` | 烧写/进 IAP/升级/观察 的基础函数 |
 | `ymodem_send.py` | YMODEM 发送端（协议核心，与网页 ymodem.js 对齐） |
+
+真板实测（STM32F401RET6）当前 T1-T5 全通过。
 
 完整失效模式清单见 `Bootloader/docs/TEST_PLAN.md`（含 18 次断电暴力测试计划）。
 
@@ -303,9 +323,10 @@ python tools/board.py flash build/bl_f401.bin
 4. **切分支后 Bootloader/ 文件丢失**：`git checkout HEAD -- Bootloader/` 恢复
 5. **批量 Edit 部分丢失**：同一消息里对同一文件发多个 Edit，可能静默丢失部分，改完务必 grep/Read 验证落盘
 6. **`HSE_VALUE` 不一致**：串口满屏乱码（HAL 反算波特率错）
-7. **看门狗比单次阻塞短**：设备周期重启（擦除 128KB 最坏 4s，超时取 6s）
+7. **配置区残槽会让升级永远失败**（已修，但换芯片时注意）：`Meta::init()` 若无有效槽且区内有脏数据，必须先擦除整片再从头写，否则 `mark_download` 写偏移 0 会撞上未擦除的 Flash
 8. **标准 printf 撑爆 ROM**：`vsnprintf` 连带浮点格式化吃 6.5KB，必须用 `core/bl_log`
 9. **栈太小**：`Session` 带 1KB YMODEM 缓冲，栈不能小于 2KB
+10. **测试脚本别盲等 ACK**：bootloader 会周期性补发 `C`，用 `wait_byte` 盲等容易读错字节；按日志文本（如 `[session] file=`）判定更稳
 
 ---
 
