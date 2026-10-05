@@ -26,9 +26,10 @@ Bootloader/
 ```c
 BL_FLASH_SIZE    512UL * 1024UL     /* Flash 容量 */
 BL_BOOT_SIZE     16UL * 1024UL      /* Bootloader 区，正好一个扇区 */
-BL_SRAM_BASE     0x20000000UL
-BL_SRAM_END      0x20018000UL       /* 96KB，不含 */
 ```
+
+SRAM 不用配 —— 上电判据只看「SP 是不是 0x20000000 起的 8 字节对齐地址」，
+这是 Cortex-M 的架构约定，与芯片容量无关。
 
 APP 区地址与大小都是派生值：`BL_APP_BASE = BL_FLASH_BASE + BL_BOOT_SIZE`。
 

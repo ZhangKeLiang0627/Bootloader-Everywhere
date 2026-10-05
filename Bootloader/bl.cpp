@@ -307,14 +307,23 @@ Status crcSelftest() noexcept
 
 // ③ 校验：向量表
 //
-// 向量表是否像个能跑的东西：SP 落在 SRAM 内、入口落在 APP 区内且为 Thumb 地址。
+// 向量表是否像个能跑的东西：SP 是 SRAM 里的合法栈顶、入口落在 APP 区内且为 Thumb 地址。
 // 两次 32 位读而已，却能挡住最常见的两类「坏固件」：
-//   - 空片：全 0xFF → SP=0xFFFFFFFF 不在 SRAM 范围
+//   - 空片：全 0xFF → SP=0xFFFFFFFF 不在 SRAM 区、PC 也不在 APP 区内
 //   - 擦到一半的扇区：向量表首字可能已被擦成 0xFF 或残值
+//
+// SP 的判据刻意只做「宽范围 + 8 字节对齐」，不要求知道 SRAM 容量：
+//   - 0x20000000 是 Cortex-M 的 SRAM 区基址（ARMv7-M 架构约定），不是芯片参数
+//   - 1MB 的宽度足够覆盖 F1/F4/GD32/CH32 全系；这里要的不是精确边界，
+//     只是「像不像一个栈顶」（非 0xFF、在 SRAM 区、按 AAPCS 8 字节对齐）
+//   - SRAM 不在此处的芯片（如 STM32H7 的 0x24000000）改下面两个常量即可
 static bool vectorsSane(uint32_t sp, uint32_t pc) noexcept
 {
-    return (sp >= BL_SRAM_BASE) && (sp <= BL_SRAM_END) &&
-           (pc >= BL_APP_BASE)  && (pc <  BL_APP_END) && ((pc & 1U) != 0U);
+    constexpr uint32_t kSramBase = 0x20000000U;   // SRAM 区基址（Cortex-M 架构约定）
+    constexpr uint32_t kSramSpan = 0x00100000U;   // 1MB 宽，覆盖 F1/F4/GD32/CH32
+
+    return (sp >= kSramBase) && (sp < (kSramBase + kSramSpan)) && ((sp & 7U) == 0U) &&
+           (pc >= BL_APP_BASE) && (pc < BL_APP_END) && ((pc & 1U) != 0U);
 }
 
 // 上电时读 APP 区前两个字判断能不能启动。
