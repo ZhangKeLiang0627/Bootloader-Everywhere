@@ -1,24 +1,12 @@
 # USER.md — 快速上手
 
-> 这是给**使用者**的文档。想了解原理细节或接手开发，看 `AGENTS.md`。
-
-## 这是什么
-
-一个可移植的**串口 IAP Bootloader**。板子先跑它，它再决定是跳进你的
-APP、还是留在原地等新的固件。
-
-- 用 YMODEM-1K 协议经串口刷固件，写入 APP 区 → 校验 → 跳转
-- 有网页版上位机（Web Serial）：只要浏览器，不用装任何软件
-- **定位是 IAP，不是 OTA** —— 人站在板子前面刷，所以不做自动回滚、
-  不启用看门狗，追求的是简单、可移植、可读懂
-
----
+> 给**使用者**的文档。想了解原理细节或接手开发，看 `AGENTS.md`。
 
 ## 快速上手（3 步刷机）
 
 1. 用 **Chrome / Edge** 打开网页：
    **https://zhangkeliang0627.github.io/Bootloader-Everywhere/**
-2. 点「连接串口」，选你的板子串口（115200 8N1）
+2. 点「连接串口」，选你的板子（115200 8N1）
 3. 拖入 `.bin` 固件，点「开始升级」
 
 网页会自动把板子唤回 Bootloader 再开始传输 —— **全程不用按键、不用手动复位**。
@@ -54,8 +42,7 @@ APP、还是留在原地等新的固件。
 
 1. 网页点「开始升级」→ 向串口逐字节发关键字 `#Bootloader-Everywhere`
 2. APP 匹配到完整关键字 → 自己做一次软件复位
-3. Bootloader 读复位原因，发现是「软件复位 + 固件 Valid」→ 开一个
-   **15 秒的限时窗口**等 YMODEM
+3. Bootloader 读复位原因，发现是软件复位 → 开一个 **15 秒的限时窗口**等 YMODEM
 4. 窗口内收到首包就正常刷机；15 秒没等到东西，自动跳回 APP 继续跑
 5. 正常上电 / 按复位键 → **零等待**直接跳 APP，没有任何启动延迟
 
@@ -73,16 +60,18 @@ blRequestUpdate();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
 ```
 
 样板见 `TestApp/app_main.c`（test-app 分支，纯寄存器实现）。
-**不需要**做什么"确认"、"喂狗"之类的动作 —— 本 Bootloader 不要这些。
+**不需要**做"确认固件"、"喂狗"之类的动作。
 
 ---
 
 ## 已知取舍（说清楚，免得踩坑）
 
-- **刷进坏固件不会自动回滚**。能过 CRC 校验、但一跑就崩的固件，会被正常
-  跳转进去然后卡住；这时断电重上电，Bootloader 会回 IAP，重新刷一个即可。
+- **刷进坏固件不会自动回滚**。能过 CRC 校验、但一跑就崩的固件会被正常跳转
+  进去然后卡住；这时断电重上电，Bootloader 会回 IAP，重新刷一个即可。
   这是刻意去掉的复杂度，不是缺陷。
 - **没有看门狗**。所以 APP 不需要（也无需）喂狗。
+- **时钟由你的工程配**（库不配）。没提供 `SystemClock_Config()` 时芯片跑在
+  默认的 HSI 16MHz —— 串口照样能用，只是慢。开机日志里 `sysclk=` 能看出来。
 - 传输中断电是安全的：状态停在 `Download`，下次上电留在 IAP 可重刷。
 
 ---
@@ -91,15 +80,14 @@ blRequestUpdate();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
 
 | 工具 | 位置 | 用途 |
 |---|---|---|
-| **库本体（只需这 6 个文件）** | `Bootloader/` | bl.h / bl.cpp / bl_port.h / bl_port_stm32f4.cpp / bl_config.h / README.md |
-| 库文档（含移植指南） | `Bootloader/README.md` | 怎么用、怎么移植、常见坑 |
+| **库本体（只需这 5 个文件）** | `Bootloader/` | bl.h / bl.cpp / bl_port.h / bl_port_stm32f4.cpp / bl_config.h |
+| 库文档（含执行流程、移植指南） | `Bootloader/README.md` | 怎么用、怎么移植、常见坑 |
 | 网页上位机 | `docs/`（web 分支） | 浏览器刷机，已上线 |
-| 命令行构建 | `tools/build.py` | 编译 + 量 ROM + 导出 bin/hex |
+| 命令行构建 | `tools/build.py` | 编译 + 量 ROM |
 | 板端工具 | `tools/board.py` | 备份/烧写/擦除/看串口 |
 | 测试固件编译 | `TestApp/build_app.py` | 编正常/故障测试固件（test-app 分支） |
 | 自动化测试 | `TestApp/tools/test_auto.py` | 一键跑升级/唤回/断流测试 |
 | 断电测试引导 | `TestApp/tools/power_test.py` | 提示你拔电的断电暴力测试 |
-| 历史资料 | `docs/HISTORY.md` | 立项期测试方案与调研（不代表当前实现） |
 
 > **移植到别的工程时，只拷 `Bootloader/` 这一个目录就够** —— 仓库里的
 > `Core/ Drivers/ MDK-ARM/` 只是 STM32F401 的示例工程。
@@ -116,21 +104,12 @@ blRequestUpdate();       /* 写 SCB->AIRCR = SYSRESETREQ，软复位 */
 
 ---
 
-## 常用命令速查
+## 常用命令
 
-```bash
-# 编译 bootloader（Keil 命令行）
-UV4 -r MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o build.log
-
-# 编译 + 下载到板子
-UV4 -f MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o flash.log
-
-# 命令行量 ROM（不打开 Keil）
-python tools/build.py
-
-# 看板子串口
-python tools/board.py monitor
-
-# 编译测试固件（在 test-app 分支）
-python TestApp/build_app.py --fail 0
-```
+| 做什么 | 命令 |
+|---|---|
+| 编译（改过源码时**必须**用这个） | `UV4 -r MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o build.log` |
+| 下载到板子 | `UV4 -f MDK-ARM/LUMOS-bootloader.uvprojx -j0 -o flash.log` |
+| 量 ROM（不开 Keil） | `python tools/build.py` |
+| 看板子串口 | `python tools/board.py monitor` |
+| 编测试固件（test-app 分支） | `python TestApp/build_app.py --fail 0` |
