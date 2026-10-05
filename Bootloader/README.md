@@ -12,7 +12,7 @@
 Bootloader/
 ├── bl.h                 对外头文件：blRun() + Status（C 工程也能 include）
 ├── bl.cpp               全部实现（日志/CRC/校验/YMODEM/会话/决策/入口）
-├── bl_port.h            移植契约：要实现的 12 个函数
+├── bl_port.h            移植契约：要实现的 13 个函数
 ├── bl_port_stm32f4.cpp  STM32F4 现成实现（换芯片照它再写一份）
 └── bl_config.h          分区参数 + YMODEM 参数 + 日志开关
 ```
@@ -89,6 +89,19 @@ APP 区最前面两个字是向量表的 **SP**（初始栈顶）和 **PC**（�
 
 **收益**：不需要配置区 / 状态机 / 魔术数，不占 Flash，不额外擦扇区，启动零等待。
 
+## 怎么进入 IAP（三种场合）
+
+| 场合 | 做法 |
+|---|---|
+| 板子上有按钮 | **按住按钮上电** → 直接停 IAP。上电读一次电平，零等待，不需要 APP 配合 |
+| APP 正在正常跑 | 上位机发关键字 → APP 软复位 → 15s 限时窗口 |
+| APP 区是空的 / 传输没提交 | 上电自动停 IAP |
+
+按钮那条：库调 `bl_port.h` 的 `bootPinHeld()` 读电平，引脚与极性在
+`bl_port_stm32f4.cpp` 顶部四行宏里配；引脚本身由宿主配成「输入 + 上拉」
+（本仓库见 `Core/Src/main.c` 的 `bootPinInit()`）。松开按钮重新上电即正常启动。
+板子上没有按钮：把那四行宏注释掉，`bootPinHeld()` 自动返回 false。
+
 ## 升级流程（正常一次）
 
 ```
@@ -108,13 +121,14 @@ APP 区最前面两个字是向量表的 **SP**（初始栈顶）和 **PC**（�
 
 ## 移植（换芯片）
 
-实现 `bl_port.h` 的 12 个函数，`bl.cpp` 一个字都不用改：
+实现 `bl_port.h` 的 13 个函数，`bl.cpp` 一个字都不用改：
 
 ```
 flashSectorSize  flashBytesToSectorEnd  flashErase  flashWrite  flashRead
 uartRead  uartWrite  uartFlushRx
 tickMs  delayMs
 resetCause  jumpToApp
+bootPinHeld        （没按钮的直接 return false）
 ```
 
 三条约定：
@@ -124,6 +138,8 @@ resetCause  jumpToApp
 - 所有「等标志位」的循环都要带超时
 
 宿主必须先初始化好：时钟、串口（8N1，波特率与上位机一致）、Flash 接口时钟。
+要用「按住按钮上电」还要把按钮引脚配成「输入 + 上拉」——**这步漏了按键就没反应**，
+但不会误判（见下面「常见坑」）。
 若宿主用中断收串口，IAP 期间要关掉收类中断 —— 库是轮询收的，
 `uartFlushRx()` 里顺带关掉了 `RXNEIE / PEIE / EIE`。
 
@@ -135,6 +151,7 @@ resetCause  jumpToApp
 | 串口满屏乱码 | 宿主时钟配错 → HAL 算错波特率分频。串口是异步的，双方只能各自算准 |
 | APP 一跑就 HardFault | APP 自己没使能 FPU（库不再代劳；CubeMX 的 `SystemInit()` 里有这段） |
 | 上电永远停在 IAP | APP 区向量表非法（空片 / 上次传输没提交）。重新刷一次即可 |
+| 按住按钮没反应 | 该 GPIO 端口时钟没开，或引脚没配成输入。库读到时钟未开就按「没按」处理（刻意如此，反向误判会让 APP 永远起不来） |
 | 编译报重复定义 `SystemClock_Config` | 宿主里有两份，删掉一份 |
 | ROM 超出 Bootloader 区 | 别链接标准 `printf`（连带浮点吃约 6.5KB），用 `BL_LOG` |
 
@@ -142,7 +159,7 @@ resetCause  jumpToApp
 
 | 项 | 值 |
 |---|---|
-| 整份固件（库 + 宿主 + HAL + CMSIS） | 12504 B，16KB 区余量 3880 B |
+| 整份固件（库 + 宿主 + HAL + CMSIS） | 12624 B，16KB 区余量 3760 B（含按键功能） |
 | 库本体（`tools/build.py` 量，不含 HAL 与宿主时钟） | 约 8.4KB |
 | 关日志（`-DBL_DEBUG_LOG=0`） | 再省约 2.7KB |
 | 真板回归 | `TestApp/tools/test_auto.py` T1-T5 全通过 |
