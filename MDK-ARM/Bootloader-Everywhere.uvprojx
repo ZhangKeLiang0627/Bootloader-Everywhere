@@ -339,7 +339,7 @@
               <MiscControls>-Oz -fno-exceptions</MiscControls>
               <Define>USE_HAL_DRIVER,STM32F401xE</Define>
               <Undefine></Undefine>
-              <IncludePath>..\Bootloader;../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
+              <IncludePath>..\Bootloader;../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\UserApp</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -397,6 +397,11 @@
               <FileName>bl.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\Bootloader\bl.cpp</FilePath>
+            </File>
+            <File>
+              <FileName>bl_protocol.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\bl_protocol.cpp</FilePath>
             </File>
             <File>
               <FileName>bl_port_stm32f4.cpp</FileName>
@@ -506,6 +511,16 @@
               <FileName>stm32f4xx_hal_msp.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32f4xx_hal_msp.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Bootloader-Everywhere/User</GroupName>
+          <Files>
+            <File>
+              <FileName>main.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>../UserApp/main.cpp</FilePath>
             </File>
           </Files>
         </Group>

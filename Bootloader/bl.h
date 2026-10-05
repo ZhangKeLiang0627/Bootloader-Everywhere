@@ -13,7 +13,6 @@ namespace bl {
 
 enum class Status : int32_t {
     Ok        =  0,
-    Error     = -1,
     BadParam  = -2,
     Timeout   = -3,
     FlashFail = -4,
