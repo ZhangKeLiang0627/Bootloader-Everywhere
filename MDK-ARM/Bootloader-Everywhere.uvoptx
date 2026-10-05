@@ -22,7 +22,7 @@
   </DaveTm>
 
   <Target>
-    <TargetName>LUMOS-bootloader</TargetName>
+    <TargetName>Bootloader-Everywhere</TargetName>
     <ToolsetNumber>0x4</ToolsetNumber>
     <ToolsetName>ARM-ADS</ToolsetName>
     <TargetOption>
