@@ -59,7 +59,7 @@ CHIPS = {
 # ---------------------------------------------------------------------------
 # 源码清单
 # ---------------------------------------------------------------------------
-LIB_SRCS = ['bl.cpp', 'bl_port_stm32f4.cpp']   # 库本体 + STM32F4 移植实现
+LIB_SRCS = ['bl.cpp', 'bl_protocol.cpp', 'bl_port_stm32f4.cpp']   # 库本体 + STM32F4 移植实现
 
 # 只编译真正用到的 HAL 模块。全量编译会把没用到的模块也拖进来占 ROM。
 HAL_NEED = ['stm32f4xx_hal.c', 'stm32f4xx_hal_cortex.c', 'stm32f4xx_hal_rcc.c',

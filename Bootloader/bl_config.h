@@ -1,16 +1,14 @@
 #ifndef BL_CONFIG_H
 #define BL_CONFIG_H
 
-// Flash 分区。换芯片只改这几个数（照数据手册填），其余全是派生值。
+// Flash 分区。**换芯片只需要改 2 个数**（照数据手册填），其余都是派生值：
 //
 //   STM32F401xE  512KB → BOOT 16KB | APP 496KB
 //   STM32F405/7  1MB   → BOOT 16KB | APP 1008KB
 //
 // APP 区必须落在扇区起点上：Flash 只能整扇区擦，差一个字节会连邻近区一起擦掉。
 // 上电还会用 flashSectorAt() 查扇区表精查一次（表由 port 提供）。
-#ifndef BL_FLASH_BASE
-#define BL_FLASH_BASE           0x08000000UL
-#endif
+#define BL_FLASH_BASE           0x08000000UL   // 架构常量，不配置：Flash 别名区（ARMv7-M 约定）
 
 #ifndef BL_FLASH_SIZE
 #define BL_FLASH_SIZE           (512UL * 1024UL)     // F401xE；F405/407 改 1024
