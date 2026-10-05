@@ -235,15 +235,22 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
    每次都误判 → 上电永远进 IAP、APP 起不来。`bootPinHeld()` 因此先查时钟位，
    没开就按「没按」处理
 2. **`UV4 -f` 不重编**：改过源文件必须 `-r`（§4.1）
-3. **切分支后 `Bootloader/` 大面积显示 `D`**：`git checkout HEAD -- Bootloader/` 恢复
-4. **切分支后不要盲发 `git add -A`**：会把手滑删掉的文件一起提交（本项目犯过，误删了 9 个 `Core/` 文件）
-5. **同一消息里批量 Edit 同一文件会静默丢部分改动**：改完 grep/Read 复核
-6. **轮询模型下别发多字节命令**：YMODEM 之外的自定义交互要按字节慢发
-7. **`%lu` 依赖 `%u` 分支**：精简日志格式化时删 `%u` 会让所有 `%lu` 打成字面量 `%u`
+3. **切分支后工作区文件大面积显示 `D`**：`git checkout HEAD -- <路径>` 恢复。
+   实测不止 `Bootloader/`，`docs/`、`tools/` 也会被清（2026-10-06 又踩到两次）。
+4. **写完新文件立即 `git add`**：工作区被清时**未入库的文件找不回来** ——
+   `docs/js/protocol.js` 等 4 个文件就这样丢过一次，只能照记忆重写。
+   另外：`git checkout -- <path>` 恢复之后**不要再用写文件的工具碰同一目录树**，
+   恢复的文件会被再清一次（本项目连续踩到）。
+5. **切分支后不要盲发 `git add -A`**：会把「工作区被清」这件事当成删除一起提交 ——
+   `docs/` 被清那次就这么误删了 `docs/PROTOCOL_DESIGN.md`。
+   提交前先看一遍 `git status`，`D` 开头的都要先确认是不是被清的。
+6. **同一消息里批量 Edit 同一文件会静默丢部分改动**：改完 grep/Read 复核
+7. **轮询模型下别发多字节命令**：YMODEM 之外的自定义交互要按字节慢发
+8. **`%lu` 依赖 `%u` 分支**：精简日志格式化时删 `%u` 会让所有 `%lu` 打成字面量 `%u`
    （真板实测暴露过）
-8. **`HSE_VALUE` 真相源只有一个**：`stm32f4xx_hal_conf.h`；别在 Keil 的 `<Define>`
+9. **`HSE_VALUE` 真相源只有一个**：`stm32f4xx_hal_conf.h`；别在 Keil 的 `<Define>`
    里再定义一次
-9. **`bl.h` 要能被 C 包含**：C++ 部分（`namespace bl`）必须在 `#ifdef __cplusplus` 里，
+10. **`bl.h` 要能被 C 包含**：C++ 部分（`namespace bl`）必须在 `#ifdef __cplusplus` 里，
    且用 `<stdint.h>` 而不是 `<cstdint>`
 
 ---
