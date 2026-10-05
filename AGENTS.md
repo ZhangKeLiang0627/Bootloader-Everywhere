@@ -160,8 +160,8 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
 - `flashErase` 必须拒绝擦除 Bootloader 自身区域
 - 扇区可能不等长（F4：0-64KB 每扇区 16KB、64-128KB 一扇区 64KB、之后每扇区 128KB），
   所以擦除按 `flashSectorAt()` 查表逐个走（表由 port 给，算法在 bl.cpp）
-- 迁移时改 `bl_config.h` 的 4 个数：`BL_FLASH_SIZE` / `BL_BOOT_SIZE` /
-  `BL_SRAM_BASE` / `BL_SRAM_END`
+- 迁移时改 `bl_config.h` 的 2 个数：`BL_FLASH_SIZE` / `BL_BOOT_SIZE`
+  —— SRAM 不用配（判据只做「像不像栈顶」的宽检查，见 §4.x `vectorsSane()`）
 - 没有复位原因寄存器的芯片：`resetCause()` 返回 `Unknown`，那就用不了唤回窗口
   （其余功能正常）
 - port 用 HAL 收发串口（`HAL_UART_Receive/Transmit`）：需要宿主的句柄名，
