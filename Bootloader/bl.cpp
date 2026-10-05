@@ -462,24 +462,23 @@ class Meta {
 public:
     static constexpr uint32_t kSlotMagic = 0x4C554D53UL;  ///< "LUMS"
 
-    /// 单个槽位布局。字段顺序一经发布不可改，否则旧设备读不懂配置区
+    /// 配置记录。字段顺序一经发布不可改，否则旧设备读不懂配置区
     struct Slot {
-        uint32_t seq;             ///< 自增序号，判定哪槽最新
         FwState  state;           ///< 固件状态
-        uint32_t fwSize;         ///< APP 有效字节数
-        uint32_t fwCrc32;        ///< APP 整镜像 CRC32
-        uint32_t fwVersion;      ///< 固件版本号
+        uint32_t fwSize;          ///< APP 有效字节数
+        uint32_t fwCrc32;         ///< APP 整镜像 CRC32
+        uint32_t fwVersion;       ///< 固件版本号
         uint32_t magic;           ///< kSlotMagic
-        uint32_t reserved[9];     ///< 预留，恒为 0
-        uint32_t slotCrc32;      ///< 本槽前 60 字节的 CRC32
+        uint32_t reserved[10];    ///< 预留，恒为 0
+        uint32_t slotCrc32;       ///< 本条记录前 60 字节的 CRC32
     };
 
     static_assert(sizeof(Slot) == BL_META_SLOT_SIZE,
-                  "Slot 布局必须与槽位大小一致");
+                  "Slot 布局必须与记录大小一致");
 
     static constexpr uint32_t kCrcSpan = sizeof(Slot) - sizeof(uint32_t);
 
-    /// 扫描配置区装载当前状态；无有效槽时置 Invalid（不写盘）
+    /// 读配置区装载状态；无有效记录时置 Invalid（不写盘）
     Status init() noexcept;
 
     const Slot& current() const noexcept { return meta_; }
@@ -492,19 +491,26 @@ public:
     /// 升级完成，置 Valid 并记录 size/crc32/version
     Status commit(uint32_t size, uint32_t crc32, uint32_t version) noexcept;
 
-    /// 擦除整个配置扇区（调试用）
-    Status eraseAll() noexcept;
-
     void dump() const noexcept;
 
 private:
-    Status writeSlot(const Slot& s) noexcept;
+    /// 擦掉整片配置区再写这一条（单槽：不追加、不轮转）
+    Status flush() noexcept;
 
-    Slot     meta_{};
-    uint32_t next_offset_ = 0;
-    uint32_t seq_         = 0;
-    bool     inited_      = false;
+    Slot meta_{};
+    bool inited_ = false;
 };
+
+/* --------------------------------------------------------------------------
+ * ③ 元数据：配置区（单槽）
+ *
+ * 状态变更就「擦整片 → 写一条」。配置区只有一个扇区，一次擦除约 1 秒，
+ * 而状态变更只发生在升级前后各一次 —— 用这点时间换掉整套槽位轮转逻辑。
+ *
+ * 为什么不能干脆不要配置区：唤回窗口的判据是「软件复位 + 固件 Valid」，
+ * 没有持久状态就分不清「正常上电」和「APP 请求刷机」；而且写到一半掉电后
+ * 会直接跳进半截固件（必然 HardFault），那时串口已经救不回来了。
+ * -------------------------------------------------------------------------- */
 
 /// 全局唯一的配置区实例
 Meta& meta() noexcept;
@@ -530,113 +536,66 @@ static bool slotValid(const Meta::Slot& s) noexcept
 
 Status Meta::init() noexcept
 {
-    Slot     slot{};
-    bool     found = false;
-    uint32_t bestSeq = 0;
-
-    next_offset_ = 0;
-    seq_         = 0;
-    meta_        = Slot{};
-    meta_.state  = FwState::Invalid;
-
-    for (uint32_t off = 0; off + BL_META_SLOT_SIZE <= BL_META_SIZE; off += BL_META_SLOT_SIZE) {
-        if (!ok(flashRead(BL_META_BASE + off, &slot, sizeof(slot)))) {
-            return Status::FlashFail;
-        }
-        if (isErased(&slot, sizeof(slot))) break;              // 顺序追加，遇空槽即止
-        next_offset_ = off + BL_META_SLOT_SIZE;                  // 占位槽（含损坏的）都要跳过
-        if (!slotValid(slot)) continue;                         // 掉电残槽，跳过
-        if (!found || slot.seq > bestSeq) {
-            meta_ = slot; bestSeq = slot.seq; found = true;
-        }
+    Slot slot{};
+    if (!ok(flashRead(BL_META_BASE, &slot, sizeof(slot)))) {
+        return Status::FlashFail;
     }
 
-    if (found) {
-        seq_ = meta_.seq;
-    } else {
-        // 无有效槽：回到「无固件」起点。
-        // 若扫描时已越过占位槽（说明区内有损坏/旧格式残槽），必须先擦掉
-        // 整片再从头写 —— 否则从偏移 0 写入会撞上未擦除的 Flash 而失败，
-        // 表现为「永远升级不进去」。
-        if (next_offset_ != 0U) {
-            if (!ok(flashErase(BL_META_BASE, BL_META_SIZE))) {
-                return Status::FlashFail;
-            }
-        }
-        meta_        = Slot{};
-        meta_.state  = FwState::Invalid;
-        seq_         = 0;
-        next_offset_ = 0;
+    if (isErased(&slot, sizeof(slot)) || !slotValid(slot)) {
+        slot       = Slot{};
+        slot.state = FwState::Invalid;
     }
 
+    meta_   = slot;
     inited_ = true;
     return Status::Ok;
 }
 
-Status Meta::writeSlot(const Slot& s) noexcept
+Status Meta::flush() noexcept
 {
     if (!inited_) return Status::BadState;
 
-    // 槽位用尽：整片擦除后从头开始
-    if (next_offset_ + BL_META_SLOT_SIZE > BL_META_SIZE) {
-        if (!ok(flashErase(BL_META_BASE, BL_META_SIZE))) return Status::FlashFail;
-        next_offset_ = 0;
-    }
+    // 先擦后写。擦除途中掉电只会让记录变成全 FF（= Invalid），
+    // 上电后留在 IAP 可重刷，不会变砖。
+    if (!ok(flashErase(BL_META_BASE, BL_META_SIZE))) return Status::FlashFail;
 
-    Slot slot = s;
-    slot.seq    = ++seq_;
-    slot.magic  = kSlotMagic;
+    Slot slot = meta_;
+    slot.magic = kSlotMagic;
     for (uint32_t& r : slot.reserved) r = 0;
     slot.slotCrc32 = Crc32::compute(reinterpret_cast<const uint8_t*>(&slot), kCrcSpan);
 
-    const uint32_t off = next_offset_;
-    if (!ok(flashWrite(BL_META_BASE + off, &slot, sizeof(slot)))) return Status::FlashFail;
+    if (!ok(flashWrite(BL_META_BASE, &slot, sizeof(slot)))) return Status::FlashFail;
 
     // 回读校验，确认真的落盘
     Slot verify{};
-    if (!ok(flashRead(BL_META_BASE + off, &verify, sizeof(verify)))) return Status::FlashFail;
+    if (!ok(flashRead(BL_META_BASE, &verify, sizeof(verify)))) return Status::FlashFail;
     if (std::memcmp(&verify, &slot, sizeof(slot)) != 0) return Status::FlashFail;
 
-    next_offset_ = off + BL_META_SLOT_SIZE;
-    meta_        = slot;
+    meta_ = slot;
     return Status::Ok;
 }
 
 Status Meta::markDownload() noexcept
 {
-    Slot s = meta_;
-    s.state    = FwState::Download;
-    s.fwSize  = 0;
-    s.fwCrc32 = 0;
-    return writeSlot(s);
+    meta_.state   = FwState::Download;
+    meta_.fwSize  = 0;
+    meta_.fwCrc32 = 0;
+    return flush();
 }
 
 Status Meta::commit(uint32_t size, uint32_t crc32, uint32_t version) noexcept
 {
-    Slot s = meta_;
-    s.state      = FwState::Valid;
-    s.fwSize    = size;
-    s.fwCrc32   = crc32;
-    s.fwVersion = version;
-    return writeSlot(s);
-}
-
-Status Meta::eraseAll() noexcept
-{
-    if (!inited_) return Status::BadState;
-    if (!ok(flashErase(BL_META_BASE, BL_META_SIZE))) return Status::FlashFail;
-    meta_        = Slot{};
-    meta_.state  = FwState::Invalid;
-    next_offset_ = 0;
-    seq_         = 0;
-    return Status::Ok;
+    meta_.state     = FwState::Valid;
+    meta_.fwSize    = size;
+    meta_.fwCrc32   = crc32;
+    meta_.fwVersion = version;
+    return flush();
 }
 
 void Meta::dump() const noexcept
 {
-    BL_LOG("[meta] state=%s seq=%lu size=%lu crc=0x%08lX ver=%lu\r\n",
+    BL_LOG("[meta] state=%s size=%lu crc=0x%08lX ver=%lu\r\n",
            toString(meta_.state),
-           static_cast<unsigned long>(meta_.seq),
            static_cast<unsigned long>(meta_.fwSize),
            static_cast<unsigned long>(meta_.fwCrc32),
            static_cast<unsigned long>(meta_.fwVersion));
@@ -1666,7 +1625,6 @@ bool layoutCheck() noexcept
 void banner() noexcept
 {
     BL_LOG("\r\n===== LUMOS-bootloader =====\r\n");
-    BL_LOG("[main] chip  : %s\r\n", BL_CHIP_NAME);
     BL_LOG("[main] flash : 0x%08lX + %lu KB\r\n",
            static_cast<unsigned long>(BL_FLASH_BASE), static_cast<unsigned long>(BL_FLASH_SIZE / 1024U));
     BL_LOG("[main] boot  : 0x%08lX (%lu KB)\r\n",
@@ -1681,7 +1639,7 @@ void banner() noexcept
 
 [[noreturn]] void blEntry() noexcept
 {
-    if (!ok(platformInit())) fatal("platform init failed");
+    if (!ok(chipInit())) fatal("chip init failed");
     if (!ok(uartInit(BL_UART_BAUDRATE))) fatal("uart init failed");
     if (!ok(flashInit())) fatal("flash init failed");
     if (!ok(crcSelftest())) fatal("crc selftest failed (check poly/init)");
@@ -1750,16 +1708,20 @@ void banner() noexcept
 
 /* ==========================================================================
  * 对外入口（C 链接：C / C++ 工程都能直接调）
- *   —— bl_config.h 里 BL_PROVIDE_MAIN=1（默认）时，本文件自带 main()
  * ==========================================================================*/
 extern "C" void blRun(void)
 {
     bl::blEntry();
 }
 
-#if BL_PROVIDE_MAIN
+/**
+ * 库自带 main —— 它就是一份独立固件，拷过来编好就能烧。
+ *
+ * 要接进已有工程，把工程自带的 main.c 移出编译，或让它改调 blRun()。
+ * 这里不放弱符号：万一宿主的 main 没调 blRun，链接期报错比运行期静默失效好。
+ */
 int main(void)
 {
     bl::blEntry();
 }
-#endif
+

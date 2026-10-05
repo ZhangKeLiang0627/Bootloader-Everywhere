@@ -11,6 +11,9 @@
  *   3. 照 bl_port.h 的注释逐项实现那几个函数
  *   4. bl.cpp 一个字都不用改
  *
+ * 系统时钟不由本文件配置 —— 它调用宿主的 SystemClock_Config()（CubeMX 生成
+ * 的工程天然有）。本文件只管串口 / Flash / 跳转这些真正的板级细节。
+ *
  * 本实现基于 ST HAL，需要标准 CubeMX 工程的 Drivers/ 与 CMSIS。
  * 你也可以改用寄存器直写，只要满足 bl_port.h 的语义。
  */
@@ -54,151 +57,6 @@ void consoleTxFlush(uint32_t timeoutMs) noexcept;
  * -------------------------------------------------------------------------- */
 
 /* ============================================================================
- * 编译期自检：参数齐不齐、自不自洽
- * ==========================================================================*/
-#if !defined(BL_HSE_HZ) || !defined(BL_PLL_M) || !defined(BL_PLL_N) || \
-    !defined(BL_PLL_P) || !defined(BL_PLL_Q) || !defined(BL_AHB_DIV) || \
-    !defined(BL_APB1_DIV) || !defined(BL_APB2_DIV) || !defined(BL_FLASH_LATENCY)
-#error "target/stm32f4 需要时钟参数：请在 bl_config.h 第一节选用 presets 里的某个 STM32F4 预置，或手填 BL_HSE_HZ / BL_PLL_* / BL_AHB_DIV / BL_APB1_DIV / BL_APB2_DIV / BL_FLASH_LATENCY"
-#endif
-
-#if defined(HSE_VALUE) && (HSE_VALUE != BL_HSE_HZ)
-#error "HSE_VALUE 与 bl_config.h 的 BL_HSE_HZ 不一致。HAL 会按 HSE_VALUE 反算系统频率，导致串口波特率全错（现象是乱码）。请在工程选项里加宏 HSE_VALUE=<BL_HSE_HZ>，或改掉 bl_config.h 里的 BL_HSE_HZ。"
-#endif
-
-namespace {
-
-/* ============================================================================
- * 把 bl_config.h 里的「分频数字」翻译成 HAL 的枚举
- *
- * 用数字而不是直接写 HAL 枚举，是为了让 bl_config.h 不必包含任何平台头文件
- * —— 那份配置对 GD32/CH32 也照样能看懂。
- * ==========================================================================*/
-
-static_assert(BL_PLL_P == 2 || BL_PLL_P == 4 || BL_PLL_P == 6 || BL_PLL_P == 8,
-              "BL_PLL_P 只允许 2 / 4 / 6 / 8");
-
-static_assert(BL_AHB_DIV == 1 || BL_AHB_DIV == 2 || BL_AHB_DIV == 4 ||
-                  BL_AHB_DIV == 8 || BL_AHB_DIV == 16 || BL_AHB_DIV == 64 ||
-                  BL_AHB_DIV == 128 || BL_AHB_DIV == 256 || BL_AHB_DIV == 512,
-              "BL_AHB_DIV 取值非法");
-
-static_assert(BL_APB1_DIV == 1 || BL_APB1_DIV == 2 || BL_APB1_DIV == 4 ||
-                  BL_APB1_DIV == 8 || BL_APB1_DIV == 16,
-              "BL_APB1_DIV 取值非法");
-
-static_assert(BL_APB2_DIV == 1 || BL_APB2_DIV == 2 || BL_APB2_DIV == 4 ||
-                  BL_APB2_DIV == 8 || BL_APB2_DIV == 16,
-              "BL_APB2_DIV 取值非法");
-
-constexpr uint32_t pllPEnum() noexcept
-{
-    return (BL_PLL_P == 2) ? RCC_PLLP_DIV2 :
-           (BL_PLL_P == 4) ? RCC_PLLP_DIV4 :
-           (BL_PLL_P == 6) ? RCC_PLLP_DIV6 : RCC_PLLP_DIV8;
-}
-
-constexpr uint32_t ahbDivEnum() noexcept
-{
-    return (BL_AHB_DIV == 1)   ? RCC_SYSCLK_DIV1   :
-           (BL_AHB_DIV == 2)   ? RCC_SYSCLK_DIV2   :
-           (BL_AHB_DIV == 4)   ? RCC_SYSCLK_DIV4   :
-           (BL_AHB_DIV == 8)   ? RCC_SYSCLK_DIV8   :
-           (BL_AHB_DIV == 16)  ? RCC_SYSCLK_DIV16  :
-           (BL_AHB_DIV == 64)  ? RCC_SYSCLK_DIV64  :
-           (BL_AHB_DIV == 128) ? RCC_SYSCLK_DIV128 :
-           (BL_AHB_DIV == 256) ? RCC_SYSCLK_DIV256 : RCC_SYSCLK_DIV512;
-}
-
-constexpr uint32_t apb1DivEnum() noexcept
-{
-    return (BL_APB1_DIV == 1)  ? RCC_HCLK_DIV1  :
-           (BL_APB1_DIV == 2)  ? RCC_HCLK_DIV2  :
-           (BL_APB1_DIV == 4)  ? RCC_HCLK_DIV4  :
-           (BL_APB1_DIV == 8)  ? RCC_HCLK_DIV8 : RCC_HCLK_DIV16;
-}
-
-constexpr uint32_t apb2DivEnum() noexcept
-{
-    return (BL_APB2_DIV == 1)  ? RCC_HCLK_DIV1  :
-           (BL_APB2_DIV == 2)  ? RCC_HCLK_DIV2  :
-           (BL_APB2_DIV == 4)  ? RCC_HCLK_DIV4  :
-           (BL_APB2_DIV == 8)  ? RCC_HCLK_DIV8 : RCC_HCLK_DIV16;
-}
-
-/* ============================================================================
- * 时钟配置
- * ==========================================================================*/
-
-/** 按 bl_config.h 建立 HSE + PLL 时钟；HSE 起振失败返回失败（由调用方兜底） */
-Status clockFromHse() noexcept
-{
-    RCC_OscInitTypeDef osc{};
-    RCC_ClkInitTypeDef clk{};
-
-    osc.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-    osc.HSEState       = RCC_HSE_ON;
-    osc.PLL.PLLState   = RCC_PLL_ON;
-    osc.PLL.PLLSource  = RCC_PLLSOURCE_HSE;
-    osc.PLL.PLLM       = BL_PLL_M;
-    osc.PLL.PLLN       = BL_PLL_N;
-    osc.PLL.PLLP       = pllPEnum();
-    osc.PLL.PLLQ       = BL_PLL_Q;
-
-    if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
-        return Status::Error;
-    }
-
-    clk.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
-                         RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-    clk.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
-    clk.AHBCLKDivider  = ahbDivEnum();
-    clk.APB1CLKDivider = apb1DivEnum();
-    clk.APB2CLKDivider = apb2DivEnum();
-
-    if (HAL_RCC_ClockConfig(&clk, BL_FLASH_LATENCY) != HAL_OK) {
-        return Status::Error;
-    }
-    return Status::Ok;
-}
-
-/**
- * 兜底：退回内部 HSI，不走 PLL
- *
- * 触发场景：板子没焊晶振、晶振虚焊、负载电容不匹配。
- * 宁可跑 16MHz 也要能通信 —— 一旦串口通不了，设备就成了砖，
- * 而 16MHz 下 115200 波特率照样工作（HAL 会按实际时钟算分频）。
- */
-Status clockFallbackHsi() noexcept
-{
-    RCC_OscInitTypeDef osc{};
-    RCC_ClkInitTypeDef clk{};
-
-    osc.OscillatorType      = RCC_OSCILLATORTYPE_HSI;
-    osc.HSIState            = RCC_HSI_ON;
-    osc.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-    osc.PLL.PLLState        = RCC_PLL_NONE;
-
-    if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
-        return Status::Error;
-    }
-
-    clk.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
-                         RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-    clk.SYSCLKSource   = RCC_SYSCLKSOURCE_HSI;
-    clk.AHBCLKDivider  = RCC_SYSCLK_DIV1;
-    clk.APB1CLKDivider = RCC_HCLK_DIV1;
-    clk.APB2CLKDivider = RCC_HCLK_DIV1;
-
-    if (HAL_RCC_ClockConfig(&clk, FLASH_LATENCY_0) != HAL_OK) {
-        return Status::Error;
-    }
-    return Status::Ok;
-}
-
-} // namespace
-
-/* ============================================================================
  * 对外：平台初始化
  * ==========================================================================*/
 namespace {
@@ -223,7 +81,21 @@ void fpuEnable() noexcept
 
 } // namespace
 
-Status platformInit() noexcept
+/**
+ * 系统时钟由宿主工程配置 —— 库只有这一句声明，一行配置都没有。
+ *
+ * CubeMX 生成的工程天然带 SystemClock_Config()（在 main.c 里），把那个文件
+ * 纳入编译即可；示例工程的实现在 Core/Src/bl_clock.c。
+ *
+ * 故意用强引用而不是弱符号：宁可「没提供就在链接期报错」，也不要运行期
+ * 悄悄跑在 16MHz —— 后者除了慢一点毫无症状，很难发现。
+ *
+ * 如果宿主把 SystemClock_Config 和 main() 放在同一个文件里：把那个 main()
+ * 去掉即可（库自带 main）。
+ */
+extern "C" void SystemClock_Config(void);
+
+Status chipInit() noexcept
 {
     /* 0. FPU 必须最先使能 —— 见 fpuEnable 的说明 */
     fpuEnable();
@@ -234,24 +106,11 @@ Status platformInit() noexcept
     }
 
     /* 2. 系统时钟 */
-    const bool hseOk = ok(clockFromHse());
-    if (!hseOk) {
-        if (!ok(clockFallbackHsi())) {
-            return Status::Error;
-        }
-    }
+    SystemClock_Config();
 
-    /* 3. 时基要按时钟重算
-     *    HAL_Init 里是按复位后的 16MHz 算的，切换 PLL 后 1ms 就不准了。 */
+    /* 3. 时基要按最终时钟重算（HAL_Init 里是按 16MHz 算的） */
     SystemCoreClockUpdate();
     (void)HAL_InitTick(TICK_INT_PRIORITY);
-
-    if (!hseOk) {
-        BL_LOG("[clk] HSE failed -> running on HSI 16MHz\r\n");
-    }
-    BL_LOG("[clk] sysclk=%lu Hz (core clock %lu Hz)\r\n",
-           static_cast<unsigned long>(HAL_RCC_GetSysClockFreq()),
-           static_cast<unsigned long>(SystemCoreClock));
 
     return Status::Ok;
 }
@@ -604,6 +463,13 @@ Status uartInit(uint32_t baudrate) noexcept
     }
 
     uartFlushRx();
+
+    /* 串口通了才能打印 —— 这也是唯一能看见「时钟到底配没配上」的地方：
+     * 若这里报 16000000，说明宿主没提供 SystemClock_Config，跑的是默认 HSI */
+    BL_LOG("[clk] sysclk=%lu Hz, uart=%lu baud\r\n",
+           static_cast<unsigned long>(HAL_RCC_GetSysClockFreq()),
+           static_cast<unsigned long>(baudrate));
+
     return Status::Ok;
 }
 
@@ -649,19 +515,6 @@ Status uartRead(uint8_t* buf, uint32_t len,
         *outRead = got;
     }
     return (got == len) ? Status::Ok : Status::Timeout;
-}
-
-/// 非阻塞探测单字节：直接读 DR 才是真「不等待」
-bool uartTryGetc(uint8_t* ch) noexcept
-{
-    if (ch == nullptr) {
-        return false;
-    }
-    if (__HAL_UART_GET_FLAG(&gUart, UART_FLAG_RXNE) == RESET) {
-        return false;
-    }
-    *ch = static_cast<uint8_t>(gUart.Instance->DR & 0xFFU);
-    return true;
 }
 
 /* ========================================================================
@@ -804,8 +657,6 @@ ResetCause resetCause() noexcept
     if ((csr & RCC_CSR_SFTRSTF)  != 0U) { return ResetCause::Software; }
     if ((csr & RCC_CSR_PORRSTF)  != 0U) { return ResetCause::PowerOn;  }
     if ((csr & RCC_CSR_PINRSTF)  != 0U) { return ResetCause::Pin;      }
-    if ((csr & RCC_CSR_BORRSTF)  != 0U) { return ResetCause::BrownOut; }
-    if ((csr & RCC_CSR_LPWRRSTF) != 0U) { return ResetCause::LowPower; }
 
     return ResetCause::Unknown;
 }
