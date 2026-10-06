@@ -298,9 +298,17 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 `@` 后接 `update` / `add` / `fix` / `refactor` / `feat` / `delete` 等；
 署名行前空一行。git 身份用 `kkl / 1184665829@qq.com`。
 
-分支改动要一起同步（`main` / `test-app` / `web`），文档改动尤其别漏。
+分支改动要一起同步（YMODEM 那三个：`main` / `test-app` / `web`）。
 新协议的开发在 `protocol-v2` / `web-v2` 上 —— **两套协议互不兼容**，别把协议相关的
 改动混着同步过去；`web` 分支已停用（不再是 GitHub Pages 发布源，见 §11）。
+
+**共同文档在 `protocol-v2` 与 `web-v2` 之间保持逐字一致**（`README.md` / `AGENTS.md` /
+`USER.md` / `Bootloader/README.md`）—— 所以描述里不写"本分支"，而写"只在 `web-v2` 分支"，
+这样两份都读得通。改完用一条命令同步：
+
+```bash
+git checkout web-v2 -- README.md AGENTS.md USER.md Bootloader/README.md
+```
 
 ---
 
@@ -324,7 +332,12 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   `stress_iap.py`（S1-S13 压测：连续升级 / 逐帧错误注入 / 应答丢失幂等 /
   重放污染探测 / 跳号续传 / 背靠背会话 / 突发帧 / 空闲超时 / END 整片回读校验）。
   载体层另有 PC 侧压测 `tools/stress_protocol.cpp`（fuzz + 突变 + 恢复能力）。
-- 网页端两个 Node 测试（不需要浏览器窗口、不需要板子）：
+- 网页端四个 Node 测试（**只在 `web-v2` 分支** —— 它们测的是 `docs/js/`；不需要浏览器窗口、
+  不需要板子）：
+  · `tools/test_protocol_js.mjs` —— 载体层的第二份实现（JS），与 `test_protocol.cpp` 同源向量。
+  · `tools/test_iap_sim.mjs` —— 用一个**虚拟从机**把 `Iap.send()` 整条链跑通（正常升级 /
+    应答丢失后的幂等恢复 / 坏帧拒收后续传），并断言日志里的步骤行**都被结算过**
+    （没有停在「进行中」的壳）。
   · `tools/test_hex.mjs` —— `docs/js/hex.js` 的单元测试。手工向量由**独立的 Python 实现**
     生成（交叉验证），外加随机往返与错误用例；`build/` 里有产物时还会拿 Keil
     `fromelf --i32` 的 .hex 与 `fromelf --bin` 的 .bin 逐字节对照。

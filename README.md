@@ -4,7 +4,7 @@
 任何时刻断电都不会变砖。
 
 **在线刷机页：<https://zhangkeliang0627.github.io/Bootloader-Everywhere/>**
-（Chrome / Edge，用 Web Serial，不装任何软件 —— 已适配本分支的自定义 0xA5 帧协议）
+（Chrome / Edge，用 Web Serial，不装任何软件 —— 对应 0xA5 帧协议的固件）
 
 ---
 
@@ -31,7 +31,7 @@
 | 想改日志 / 开关日志 | [`Bootloader/bl_log.h`](Bootloader/bl_log.h) |
 | **协议规格（帧格式 / 命令 / 错误码）** | [`docs/PROTOCOL_DESIGN.md`](docs/PROTOCOL_DESIGN.md) —— §0 是现行设计 |
 | **性能实测与横向对比** | [`docs/PERF_COMPARISON.md`](docs/PERF_COMPARISON.md) |
-| **想用网页刷机** | 上面的在线地址；源码与说明见 [`docs/`](docs/) |
+| **想用网页刷机** | 上面的在线地址；源码在 `web-v2` 分支的 `docs/` |
 | 想跑板端测试 | [`TestApp/tools/`](TestApp/tools/) —— 见下面「测试」 |
 | **接手开发（人或 AI）** | [`AGENTS.md`](AGENTS.md) |
 | 只想快速上手用一下 | [`USER.md`](USER.md) |
@@ -40,7 +40,7 @@
 
 ## 测试
 
-从「不需要硬件」到「真板压测」共四层。前三层在 PC 上跑，用**同一组测试向量**
+从「不需要硬件」到「真板压测」四层。载体层那几项用**同一组测试向量**，
 把三份实现（固件 C++ / 命令行 Python / 网页 JS）的口径钉死：
 
 | 脚本 | 覆盖 | 结果 |
@@ -48,16 +48,21 @@
 | `tools/test_protocol.cpp` | 载体层：CRC 向量 / 组帧 / 解析 / 重同步 / 帧长自检 | 45 项断言 0 失败 |
 | `tools/stress_protocol.cpp` | 载体层压测：fuzz 32MB / 单字节突变 54 万次 / 对抗流 / 恢复能力 | 33 项断言 0 失败 |
 | `TestApp/tools/proto.py selftest` | 与上同源向量（Python 侧） | 全过 |
-| `tools/test_protocol_js.mjs` | 与上同源向量（JS 侧） | 22 项断言 0 失败 |
-| `tools/test_iap_sim.mjs`〔web-v2〕 | 用**虚拟从机**把 IAP 全流程跑一遍（不需要硬件），含「步骤行是否都结算」 | 19 项断言 0 失败 |
 | `TestApp/tools/test_proto.py` | 真板正常路径 T1-T5 | 5/5 |
 | `TestApp/tools/test_proto_edge.py` | 真板边界与畸形输入 E1-E15 | 16/16 |
 | `TestApp/tools/stress_iap.py` | 真板压测 S1-S13 | 13/13 |
 | `TestApp/tools/test_proto_perf.py` | 2K - 496K 固件耗时实测 | 见 `docs/PERF_COMPARISON.md` |
-| `tools/test_hex.mjs` | 网页端 `.hex` 解析：向量 / 往返 / 错误用例 / 与真实 Keil 产物比对 | 53 项断言 0 失败 |
-| `tools/test_ui.mjs`〔web-v2〕 | 网页端冒烟（headless Chrome）：表单状态 / `.hex` 选择流程 / 日志排版 / 布局，并**跑一次完整升级**看最终日志 | 56 项断言 0 失败 |
 
-真板测试项（STM32F401RET6）—— 括号里是它验证的那一层防线：
+下面四项测的是网页端（`docs/js/`），**只在 `web-v2` 分支**（其它分支不含网页）：
+
+| 脚本 | 覆盖 | 结果 |
+|---|---|---|
+| `tools/test_protocol_js.mjs` | 与 `test_protocol.cpp` 同源向量（JS 侧） | 22 项断言 0 失败 |
+| `tools/test_iap_sim.mjs` | 用**虚拟从机**跑完整 IAP 流程（不需要硬件），含「步骤行是否都结算」 | 19 项断言 0 失败 |
+| `tools/test_hex.mjs` | `.hex` 解析：向量 / 往返 / 错误用例 / 与真实 Keil 产物比对 | 53 项断言 0 失败 |
+| `tools/test_ui.mjs` | 页面冒烟（headless Chrome）：表单状态 / `.hex` 流程 / 日志排版 / 布局，并**跑一次完整升级**看最终日志 | 56 项断言 0 失败 |
+
+真板测试项（STM32F401RET6）—— 每一项都对应一层防线：
 
 - **T1-T5**：正常升级 / 连续升级 ×5 / 传输中断（未提交 ⇒ 不变砖）/ 篡改帧被拒且可续传 / 跳号被拒并给出续传点
 - **E1-E15**：超大固件 / 极小固件 / 向量表非法 / 各类字段不一致 / 载体层丢帧 / 坏固件被提交后仍能恢复。
@@ -72,8 +77,7 @@
 ```
 Bootloader/        ★ 就是这个库，9 个源文件 / 1732 行，没有子目录
 docs/              协议规格（PROTOCOL_DESIGN.md）+ 性能对比（PERF_COMPARISON.md）
-                   + 网页上位机（index.html / js / css，也是 GitHub Pages 的发布目录）
-tools/             开发工具：编译量体积（build.py）、板端操作（board.py）、PC 侧压测
+tools/             开发工具：编译量体积（build.py）、板端操作（board.py）、PC 侧压测与单测
 TestApp/           测试 APP 与板端测试脚本（真板验证都靠它）
 AGENTS.md          给接手的人 / AI 的完整说明
 USER.md            给使用者的快速上手
@@ -83,6 +87,9 @@ Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
                    CubeMX + Keil 工程（含宿主 main），演示"库怎么接进真实工程"
 build/             编译产物
 ```
+
+网页上位机（`index.html` / `js` / `css`）在 **`web-v2` 分支的 `docs/`** ——
+那里同时是 GitHub Pages 的发布目录，所以那份 `docs/` 里也放着上面两份规格文档。
 
 **只想用这个库的话，只拷 `Bootloader/` 就够了** ——
 是库去配合你的工程，不是你的工程来配合这个仓库。
