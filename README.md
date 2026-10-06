@@ -31,7 +31,7 @@
 | 想改日志 / 开关日志 | [`Bootloader/bl_log.h`](Bootloader/bl_log.h) |
 | **协议规格（帧格式 / 命令 / 错误码）** | [`docs/PROTOCOL_DESIGN.md`](docs/PROTOCOL_DESIGN.md) —— §0 是现行设计 |
 | **性能实测与横向对比** | [`docs/PERF_COMPARISON.md`](docs/PERF_COMPARISON.md) |
-| **想用网页刷机** | 上面的在线地址；源码与说明在 `web-v2` 分支的 `docs/`（本分支不含网页） |
+| **想用网页刷机** | 上面的在线地址；源码与说明见 [`docs/`](docs/) |
 | 想跑板端测试 | [`TestApp/tools/`](TestApp/tools/) —— 见下面「测试」 |
 | **接手开发（人或 AI）** | [`AGENTS.md`](AGENTS.md) |
 | 只想快速上手用一下 | [`USER.md`](USER.md) |
@@ -48,15 +48,14 @@
 | `tools/test_protocol.cpp` | 载体层：CRC 向量 / 组帧 / 解析 / 重同步 / 帧长自检 | 45 项断言 0 失败 |
 | `tools/stress_protocol.cpp` | 载体层压测：fuzz 32MB / 单字节突变 54 万次 / 对抗流 / 恢复能力 | 33 项断言 0 失败 |
 | `TestApp/tools/proto.py selftest` | 与上同源向量（Python 侧） | 全过 |
-| `tools/test_protocol_js.mjs`〔web-v2〕 | 与上同源向量（JS 侧） | 22 项断言 0 失败 |
-| `tools/test_iap_sim.mjs`〔web-v2〕 | 用**虚拟从机**把 IAP 全流程跑一遍（不需要硬件） | 12 项断言 0 失败 |
+| `tools/test_protocol_js.mjs` | 与上同源向量（JS 侧） | 22 项断言 0 失败 |
+| `tools/test_iap_sim.mjs` | 用**虚拟从机**把 IAP 全流程跑一遍（不需要硬件） | 12 项断言 0 失败 |
 | `TestApp/tools/test_proto.py` | 真板正常路径 T1-T5 | 5/5 |
 | `TestApp/tools/test_proto_edge.py` | 真板边界与畸形输入 E1-E15 | 16/16 |
 | `TestApp/tools/stress_iap.py` | 真板压测 S1-S13 | 13/13 |
 | `TestApp/tools/test_proto_perf.py` | 2K - 496K 固件耗时实测 | 见 `docs/PERF_COMPARISON.md` |
-
-标〔web-v2〕的两个脚本只在 `web-v2` 分支（它们 import `docs/js/protocol.js`，
-而网页只存在于那个分支）。
+| `tools/test_hex.mjs`〔web-v2〕 | 网页端 `.hex` 解析：向量 / 往返 / 错误用例 / 与真实 Keil 产物比对 | 53 项断言 0 失败 |
+| `tools/test_ui.mjs`〔web-v2〕 | 网页端冒烟（headless Chrome）：表单状态 / `.hex` 选择流程 / 布局 | 40 项断言 0 失败 |
 
 真板测试项（STM32F401RET6）—— 括号里是它验证的那一层防线：
 
@@ -73,7 +72,7 @@
 ```
 Bootloader/        ★ 就是这个库，9 个源文件 / 1732 行，没有子目录
 docs/              协议规格（PROTOCOL_DESIGN.md）+ 性能对比（PERF_COMPARISON.md）
-                   （网页上位机在 web-v2 分支的 docs/，那里同时是 Pages 发布目录）
+                   + 网页上位机（index.html / js / css，也是 GitHub Pages 的发布目录）
 tools/             开发工具：编译量体积（build.py）、板端操作（board.py）、PC 侧压测
 TestApp/           测试 APP 与板端测试脚本（真板验证都靠它）
 AGENTS.md          给接手的人 / AI 的完整说明

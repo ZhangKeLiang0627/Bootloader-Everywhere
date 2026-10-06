@@ -312,6 +312,16 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   `stress_iap.py`（S1-S13 压测：连续升级 / 逐帧错误注入 / 应答丢失幂等 /
   重放污染探测 / 跳号续传 / 背靠背会话 / 突发帧 / 空闲超时 / END 整片回读校验）。
   载体层另有 PC 侧压测 `tools/stress_protocol.cpp`（fuzz + 突变 + 恢复能力）。
+- 网页端两个 Node 测试（在 `web-v2` 分支 —— 它们测的是 `docs/js/`，本分支没有网页；
+  不需要浏览器窗口、不需要板子）：
+  · `tools/test_hex.mjs` —— `docs/js/hex.js` 的单元测试。手工向量由**独立的 Python 实现**
+    生成（交叉验证），外加随机往返与错误用例；`build/` 里有产物时还会拿 Keil
+    `fromelf --i32` 的 .hex 与 `fromelf --bin` 的 .bin 逐字节对照。
+  · `tools/test_ui.mjs` —— headless Chrome + CDP 的页面冒烟：页面加载/自检、从机地址
+    步进器（含钳位）、`.hex` 选中→解析→按钮状态、错误文件被拒、拖入非法后缀、
+    布局没塌，最后可 `--shot` 截整页图。它**注入一个假的 Web Serial**，
+    所以「点连接之后」的那几条（地址锁定、按钮是否把固件算进去）也能验。
+    用法：先在 `docs/` 起静态服务，再 `node tools/test_ui.mjs --url http://127.0.0.1:8090`。
 - 性能对比（与 YMODEM / esptool / mcumgr / OpenBLT / UDS）见 `docs/PERF_COMPARISON.md`：
   纯协议效率不是瓶颈（换成最省的 YMODEM 也只快 1.2 秒/200KB），
   **波特率是唯一的数量级杠杆**（实测 3.5-4.3 倍），块大小在高速下才重要。
