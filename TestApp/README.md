@@ -18,12 +18,15 @@ TestApp/
 ├── README.md            本文档
 ├── app_main.c           APP 主体（寄存器直接驱动，不依赖 HAL/CubeMX）
 ├── startup_app.s        启动文件（取自 ST 的标准 startup，栈 4KB / 堆 0）
-├── link_app.sct         链接脚本：整个镜像从 0x08004000 开始，上限 368KB
+├── link_app.sct         链接脚本：整个镜像从 0x08004000 开始，上限 496KB
 ├── build_app.py         构建脚本（armclang + armasm + armlink）
 └── tools/
-    ├── proto.py         载体层参考实现 + 命令行升级上位机（也是网页端的协议参照）
-    ├── test_proto.py    板端回归测试 T1-T5
-    └── board_test.py    板端基础设施（烧写 / 复位 / 观察串口 / info）
+    ├── proto.py             载体层参考实现 + 命令行升级上位机（网页端的协议参照）
+    ├── test_proto.py        正常路径回归 T1-T5
+    ├── test_proto_edge.py   边界与畸形输入 E1-E15
+    ├── test_proto_perf.py   不同固件大小的耗时实测
+    ├── stress_iap.py        压测 S1-S13（连续升级 / 错误注入 / 幂等 / 突发 / 空闲超时）
+    └── board_test.py        板端基础设施（烧写 / 复位 / 观察串口 / info）
 ```
 
 ## 构建
@@ -36,8 +39,8 @@ python TestApp/build_app.py
 依赖 Keil MDK 的 AC6 工具链（`armclang` / `armasm` / `armlink` / `fromelf`）。
 安装路径不同时设置环境变量 `KEIL_ARMCLANG_BIN`。
 
-链接区域卡死在 `0x08004000 + 0x5C000`（= `BL_APP_SIZE`），
-一旦超出，`armlink` 会直接报 `L6406E` —— 不必等上板才发现。
+链接区域卡死在 `0x08004000 + 0x7C000`（= `BL_APP_SIZE`，496 KB），
+一旦超出，`armlink` 直接报区域超限（`L6220E` / `L6406E`）—— 不必等上板才发现。
 
 ## 升级
 
@@ -47,6 +50,9 @@ python TestApp/build_app.py
 python TestApp/tools/proto.py send build/app_test.bin      # 默认 COM3
 python TestApp/tools/proto.py selftest                     # 只校验两端口径，不碰串口
 python TestApp/tools/test_proto.py                         # 一键跑 T1-T5
+python TestApp/tools/test_proto_edge.py                    # 边界与畸形输入 E1-E15
+python TestApp/tools/test_proto_perf.py --sizes 2,64,200   # 耗时实测（KB）
+python TestApp/tools/stress_iap.py --rounds 12 --slow      # 压测 S1-S13
 ```
 
 预期输出：
