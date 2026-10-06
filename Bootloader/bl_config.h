@@ -5,14 +5,14 @@
 //   STM32F401xE  512KB → BOOT 16KB | APP 496KB
 //   STM32F405/7  1MB   → BOOT 16KB | APP 1008KB
 // APP 区必须落在扇区起点上：Flash 只能整扇区擦，差一个字节会连邻近区一起擦掉。
-#define BL_FLASH_BASE           0x08000000UL   // 架构常量，不配置：Flash 别名区（ARMv7-M 约定）
+#define BL_FLASH_BASE           0x08000000UL   
 
 #ifndef BL_FLASH_SIZE
-#define BL_FLASH_SIZE           (512UL * 1024UL)     // F401xE；F405/407 改 1024
+#define BL_FLASH_SIZE           (512UL * 1024UL)     
 #endif
 
 #ifndef BL_BOOT_SIZE
-#define BL_BOOT_SIZE            (16UL * 1024UL)      // 正好一个扇区
+#define BL_BOOT_SIZE            (16UL * 1024UL)     
 #endif
 
 #define BL_BOOT_BASE            (BL_FLASH_BASE)
@@ -51,10 +51,7 @@
 
 // 软件复位唤回窗口：APP 软复位后等上位机的时长；超时且未擦除过则跳回 APP
 #ifndef BL_RECALL_WINDOW_MS
-#define BL_RECALL_WINDOW_MS     15000UL
+#define BL_RECALL_WINDOW_MS     10000UL
 #endif
-
-// 日志开关（BL_DEBUG_LOG / BL_LOG_DURING_TRANSFER）与 BL_LOG 宏在 bl_log.h，
-// 它们自带默认值，需要覆盖时在那里改或从编译选项 -D 传入。
 
 #endif /* BL_CONFIG_H */

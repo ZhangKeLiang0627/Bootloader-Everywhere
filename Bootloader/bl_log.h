@@ -1,8 +1,5 @@
 // 轻量日志：不依赖 stdio，只支持 %u %d %X %s %%（可带 0 与宽度修饰，如 %08lX）。
-//
-// 与协议共用同一个串口，所以传输期间会被 mute() 静音。
-// 为什么不用 stdio：标准 vsnprintf 会连带浮点格式化吃掉约 6.5KB，
-// 而 Bootloader 只有 16KB 可用；这里的实测开销约 3.6KB（BL_DEBUG_LOG=1）。
+
 #ifndef BL_LOG_H
 #define BL_LOG_H
 

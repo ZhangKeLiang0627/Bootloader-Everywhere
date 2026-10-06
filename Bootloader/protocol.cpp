@@ -1,4 +1,4 @@
-// 串口帧协议（载体层）实现。见 protocol.h。
+// 串口帧协议（载体层）实现。见 protocol.h
 
 #include "protocol.h"
 

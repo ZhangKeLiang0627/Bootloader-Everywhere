@@ -1,5 +1,4 @@
 // STM32F4 的移植实现 —— 换芯片时照这份再写一个。
-// 库只调 bl_port.h 声明的函数，一行都不会碰这里；外设初始化由宿主工程负责。
 
 #include "bl_log.h"
 #include "bl_port.h"
@@ -190,9 +189,6 @@ Status flashRead(uint32_t addr, void* buf, uint32_t len) noexcept
 
 // ------------------------------------------------------------------ 串口
 
-// 走中断接收。写 Flash 期间 CPU 会被总线停摆（RM0090：Flash 读写时取指不能进行），
-// 轮询收必然丢字节；中断 + 环形缓冲把「搬运」放在总线之外完成。
-// 这里只碰寄存器，不用宿主的 UART 句柄 —— 库是客人，初始化是宿主的事。
 namespace {
 
 constexpr uint32_t kRxRingSize  = 512U;     // 停等模型，缓冲不必大
@@ -324,8 +320,6 @@ void delayMs(uint32_t ms) noexcept
 
 ResetCause resetCause() noexcept
 {
-    // 读后即清（标志是累积的）；SFTRSTF 优先于 POR/PIN：
-    // 探针连着时软件复位会连带拉 NRST，PINRSTF 同时置位。
     const uint32_t csr = RCC->CSR;
     RCC->CSR |= RCC_CSR_RMVF;
 

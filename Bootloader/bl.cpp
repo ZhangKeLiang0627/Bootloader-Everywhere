@@ -1,9 +1,4 @@
-// Bootloader-Everywhere 主体实现：CRC32、向量表校验、IAP 会话、启动决策、入口。
-//
-// 载体帧（0xA5 帧 + CRC8）在 protocol.cpp —— 那层与业务无关，可整对文件拿走复用。
-// 日志在 bl_log.cpp。
-// 本文件只调 bl_port.h 声明的函数，不认识任何芯片厂商头文件。
-// 约束：C++11，无异常、无 RTTI、无动态内存。
+// Bootloader-Everywhere 主体实现：CRC32、向量表校验、IAP 会话、启动决策、入口.
 
 #include "bl.h"
 #include "bl_config.h"
@@ -367,17 +362,11 @@ void Session::onData(const proto::Frame& f) noexcept
         return;
     }
 
-    if (addr < nextAddr_) {                     // 重复帧（上次应答丢了）：不重写，重发应答
-        // 这里**按当前状态重建**应答，而不是"存一份上次应答再原样发回"。
-        // 存副本的做法有个真板实测出来的坑：那个缓冲是全局的，任何一条别的命令
-        // （STATUS 查询、未知命令）都会把它覆盖 —— 主机随后重传数据帧时，
-        // 收到的是那条命令的应答（命令码对不上），于是主机只能超时重试。
-        // crc_ 与 nextAddr_ 只在「帧被接受」时推进，所以按它们重建的结果与
-        // 上次成功应答逐字节相同，而且天然幂等。
+    if (addr < nextAddr_) {                     
         replyData(static_cast<uint8_t>(Code::Ok));
         return;
     }
-    if (addr != nextAddr_) {                    // 跳号：告诉主机从哪里续发
+    if (addr != nextAddr_) {                              // 跳号：告诉主机从哪里续发
         replyData(static_cast<uint8_t>(Code::AddrGap));   // 与其它 DATA 应答同格式
         return;
     }
@@ -631,19 +620,21 @@ bool layoutCheck() noexcept
 
 [[noreturn]] void blEntry() noexcept
 {
-    // 芯片已由宿主初始化好（时钟 / 串口 / Flash 接口时钟）
     BL_LOG("\r\n== Bootloader-Everywhere == flash %lu KB, app 0x%08lX + %lu KB\r\n",
            static_cast<unsigned long>(BL_FLASH_SIZE / 1024U),
            static_cast<unsigned long>(BL_APP_BASE),
            static_cast<unsigned long>(BL_APP_SIZE / 1024U));
-
+    
+    // 检查BL和APP的基地址分区布局是否合法
     if (!layoutCheck()) {
         fatal("partition layout invalid");
     }
 
+    // BL启动决策
     const Boot::Decision decision = Boot::decide();
     BL_LOG("[main] decision: %s (%s)\r\n", actionName(decision.action), decision.reason);
 
+    // 若决策出是跳转到APP，则跳转到APP
     if (decision.action == Boot::Action::JumpToApp) {
         Boot::jump(BL_APP_BASE);
     }
@@ -651,27 +642,27 @@ bool layoutCheck() noexcept
     const bool timedWindow = (decision.action == Boot::Action::EnterIapTimed);
     bool       everErased  = false;
 
-    static Session session;                     // 缓冲较大，放 .bss 不占栈
+    static Session session; 
 
     for (;;) {
         // 一旦擦除过，固件区已不可启动 —— 此后不能再跳 APP，只能无限等下一次 START
         const uint32_t waitMs =
             everErased ? 0U : (timedWindow ? BL_RECALL_WINDOW_MS : 0U);
 
+        // 运行 IAP 会话循环，等待主机指令
         const Session::Result r = session.run(waitMs);
         everErased = everErased || r.erased;
 
-        BL_LOG("[main] outcome=%s size=%lu\r\n",
-               outcomeName(r.outcome),
-               static_cast<unsigned long>(r.fwSize));
+        BL_LOG("[main] outcome=%s size=%lu\r\n", outcomeName(r.outcome), static_cast<unsigned long>(r.fwSize));
 
+        // IAP下载完成，跳转到 APP
         if (r.outcome == IapResult::Done) {
             BL_LOG("[main] download done, jumping to app\r\n");
-            delayMs(50);                        // 应答已在 uartWrite 里等到 TC，这里只是余量
+            delayMs(50);             
             Boot::jump(BL_APP_BASE);
         }
 
-        // 唤回窗口内没人来，且没动过 Flash → 跳回 APP
+        // 软件复位唤回窗口内没人来，且没动过 Flash → 跳回 APP
         if (!everErased && r.error == Status::Timeout) {
             BL_LOG("[main] no host, jumping to app\r\n");
             Boot::jump(BL_APP_BASE);
@@ -683,7 +674,7 @@ bool layoutCheck() noexcept
 
 } // namespace bl
 
-// 对外入口（C 链接：C / C++ 工程都能直接调）
+// 对外入口
 extern "C" void blRun(void)
 {
     bl::blEntry();

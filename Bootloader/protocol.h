@@ -1,4 +1,4 @@
-// 串口帧协议（载体层）。
+// 串口帧协议（载体层）
 //
 // 与芯片、工程、业务都无关：只依赖 stdint.h，整对文件拷到任何地方都能用
 // （APP 端、上位机、别的 MCU 工程）。线格式与规则见 docs/PROTOCOL_DESIGN.md §0.1。
@@ -58,8 +58,6 @@ inline void putLe32(uint8_t* p, uint32_t v) noexcept
     p[3] = static_cast<uint8_t>(v >> 24);
 }
 
-// CRC-8/SMBUS：poly 0x07、init 0x00、MSB-first（不反射）、xorout 0x00。
-// ⚠️ 与整镜像用的 CRC32（ISO-HDLC，LSB-first）位序方向相反，别写成同一个方向。
 uint8_t crc8Step(uint8_t crc, uint8_t byte) noexcept;
 uint8_t crc8(const void* data, uint32_t len) noexcept;
 
