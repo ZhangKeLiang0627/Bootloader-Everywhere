@@ -1,15 +1,16 @@
-// Bootloader-Everywhere 主体实现：日志、CRC32、向量表校验、IAP 会话、启动决策、入口。
+// Bootloader-Everywhere 主体实现：CRC32、向量表校验、IAP 会话、启动决策、入口。
 //
 // 载体帧（0xA5 帧 + CRC8）在 protocol.cpp —— 那层与业务无关，可整对文件拿走复用。
+// 日志在 bl_log.cpp。
 // 本文件只调 bl_port.h 声明的函数，不认识任何芯片厂商头文件。
 // 约束：C++11，无异常、无 RTTI、无动态内存。
 
 #include "bl.h"
-#include "bl_port.h"
 #include "bl_config.h"
+#include "bl_log.h"
+#include "bl_port.h"
 #include "protocol.h"
 
-#include <cstdarg>
 #include <cstdint>
 #include <cstring>
 
@@ -17,162 +18,13 @@ namespace bl { [[noreturn]] void blEntry() noexcept; }
 
 namespace bl {
 
-// ------------------------------------------------------------------ 日志
-
-namespace log {
-
-namespace {
-
-#if BL_DEBUG_LOG
-
-constexpr uint32_t kLineBufSize = 128U;
-
-char     gBuf[kLineBufSize];
-uint32_t gLen   = 0U;
-bool     gMuted = false;
-
-void flush() noexcept
-{
-    if (gLen > 0U) {
-        (void)uartWrite(reinterpret_cast<const uint8_t*>(gBuf), gLen);
-        gLen = 0U;
-    }
-}
-
-void put(char c) noexcept
-{
-    if (gLen >= kLineBufSize) {
-        flush();
-    }
-    gBuf[gLen++] = c;
-}
-
-// 只支持十进制与十六进制 + 可选补零宽度，覆盖全库实际用到的四种写法
-void putNumber(uint32_t v, bool hex, uint32_t width, bool zeroPad) noexcept
-{
-    const uint32_t base   = hex ? 16U : 10U;
-    const char*    digits = hex ? "0123456789ABCDEF" : "0123456789";
-    char     tmp[11];
-    uint32_t n = 0U;
-
-    if (v == 0U) {
-        tmp[n++] = '0';
-    } else {
-        while (v != 0U) {
-            tmp[n++] = digits[v % base];
-            v /= base;
-        }
-    }
-
-    for (uint32_t fill = (width > n) ? (width - n) : 0U; fill > 0U; --fill) {
-        put(zeroPad ? '0' : ' ');
-    }
-    while (n > 0U) {
-        put(tmp[--n]);
-    }
-}
-
-#endif // BL_DEBUG_LOG
-
-} // namespace
-
-// 传输期间关日志：日志与协议共用同一个串口，开着会污染上位机的接收流
-void mute(bool on) noexcept
-{
-#if BL_DEBUG_LOG && !BL_LOG_DURING_TRANSFER
-    gMuted = on;
-#else
-    (void)on;
-#endif
-}
-
-// 支持 %u %d %X %s %%，可带 0 与宽度修饰（如 %08lX）。不支持浮点。
-void printf(const char* fmt, ...) noexcept
-{
-#if BL_DEBUG_LOG
-    if (fmt == nullptr || gMuted) {
-        return;
-    }
-
-    gLen = 0U;
-
-    va_list ap;
-    va_start(ap, fmt);
-
-    for (const char* p = fmt; *p != '\0'; ++p) {
-        if (*p != '%') {
-            put(*p);
-            continue;
-        }
-
-        ++p;                                        // 跳过 '%'
-
-        bool zeroPad = false;
-        if (*p == '0') {
-            zeroPad = true;
-            ++p;
-        }
-
-        uint32_t width = 0U;
-        while (*p >= '0' && *p <= '9') {
-            width = width * 10U + static_cast<uint32_t>(*p - '0');
-            ++p;
-        }
-
-        bool isLong = false;
-        if (*p == 'l' || *p == 'L') {
-            isLong = true;
-            ++p;
-        }
-
-        if (*p == 'd') {
-            int32_t v = isLong ? static_cast<int32_t>(va_arg(ap, long))
-                               : static_cast<int32_t>(va_arg(ap, int));
-            if (v < 0) {
-                put('-');
-                v = -v;
-            }
-            putNumber(static_cast<uint32_t>(v), false, width, zeroPad);
-        } else if (*p == 'u') {                     // %lu 依赖这一支，别删
-            const uint32_t v = isLong ? static_cast<uint32_t>(va_arg(ap, unsigned long))
-                                      : static_cast<uint32_t>(va_arg(ap, unsigned int));
-            putNumber(v, false, width, zeroPad);
-        } else if (*p == 'X') {
-            const uint32_t v = isLong ? static_cast<uint32_t>(va_arg(ap, unsigned long))
-                                      : static_cast<uint32_t>(va_arg(ap, unsigned int));
-            putNumber(v, true, width, zeroPad);
-        } else if (*p == 's') {
-            const char* s = va_arg(ap, const char*);
-            while (s != nullptr && *s != '\0') {
-                put(*s++);
-            }
-        } else if (*p == '%') {
-            put('%');
-        } else if (*p == '\0') {
-            break;
-        } else {
-            put('%');                               // 未知转换符原样输出，便于发现写错的格式串
-            put(*p);
-        }
-    }
-
-    va_end(ap);
-    flush();
-#else
-    (void)fmt;
-#endif
-}
-
-} // namespace log
-
 // ------------------------------------------------------------------ CRC32
 
 // 整镜像校验用 CRC32 / ISO-HDLC（poly 0x04C11DB7，反射 → 反向多项式 0xEDB88320）。
 // 与载体层的 CRC8 位序方向相反：这个 LSB-first，那个 MSB-first。
 class Crc32 {
 public:
-    static constexpr uint32_t kInit  = 0xFFFFFFFFU;
-    static constexpr uint32_t kCheck = 0xCBF43926U;      // "123456789"
+    static constexpr uint32_t kInit = 0xFFFFFFFFU;
 
     constexpr Crc32() noexcept : value_(kInit) {}
 
@@ -270,47 +122,6 @@ static Status checkVectors(uint32_t appBase) noexcept
     return Status::Ok;
 }
 
-// 上电自检：CRC32 与载体帧都必须与上位机逐位一致，写错的话在最早时刻暴露
-static Status selfTest() noexcept
-{
-    static constexpr char kVector[] = "123456789";
-
-    Crc32 crc;
-    crc.update(kVector, 9U);
-    if (crc.value() != Crc32::kCheck) {
-        return Status::CrcFail;
-    }
-
-    // 载体帧：A5 01 02 02 00 34 12 12 03（向量见 docs/PROTOCOL_DESIGN.md §0.6.6）
-    static constexpr uint8_t kExpect[] = {
-        0xA5U, 0x01U, 0x02U, 0x02U, 0x00U, 0x34U, 0x12U, 0x12U, 0x03U,
-    };
-    const uint8_t payload[2] = {0x34U, 0x12U};
-    uint8_t       buf[16];
-
-    const uint32_t n = proto::encode(0x01U, 0x02U, payload, 2U, buf, sizeof(buf));
-    if (n != sizeof(kExpect)) {
-        return Status::Protocol;
-    }
-    for (uint32_t i = 0U; i < n; ++i) {
-        if (buf[i] != kExpect[i]) {
-            return Status::Protocol;
-        }
-    }
-
-    proto::Parser parser;
-    proto::Frame  frame;
-    bool got = false;
-    for (uint32_t i = 0U; i < n; ++i) {
-        got = parser.feed(buf[i], frame);
-    }
-    if (!got || frame.id != 0x01U || frame.code() != 0x02U || frame.len != 2U ||
-        frame.data[0] != 0x34U || frame.data[1] != 0x12U) {
-        return Status::Protocol;
-    }
-    return Status::Ok;
-}
-
 // ------------------------------------------------------------------ IAP 命令
 
 enum class IapResult : uint8_t {
@@ -355,6 +166,11 @@ constexpr uint16_t kBlockSize = BL_BLOCK_SIZE;
 static_assert(kBlockSize > 0U && kBlockSize <= (proto::kDataMax - kDataHead),
               "BL_BLOCK_SIZE 放不进载体 Data 区（上限 1024 - 14）");
 
+// 总包数字段是 2 字节，编译期挡一下：APP 区分区变大到超过 65535 个块时，
+// 这个字段会静默截断（主机与从机对不上，升级必然失败）。
+static_assert(((BL_APP_SIZE / kBlockSize) + 1U) <= 0xFFFFU,
+              "BL_APP_SIZE / BL_BLOCK_SIZE 超过 uint16，总包数字段会截断");
+
 } // namespace
 
 // 一次升级会话：等 START → 逐帧收 → END 提交。
@@ -389,9 +205,7 @@ private:
     State         state_ = State::Idle;
     proto::Parser parser_;
     proto::Frame  frame_;
-    uint8_t       tx_[32];
-    uint8_t       lastReply_[24];
-    uint16_t      lastReplyLen_ = 0U;
+    uint8_t       tx_[32];           // 应答帧上限 32 字节（设计文档 §0.1）
 
     uint32_t declaredSize_ = 0U;     // START 声明的镜像大小
     uint32_t declaredCrc_  = 0U;     // START 声明的整镜像 CRC32
@@ -447,10 +261,14 @@ bool Session::readFrame(uint32_t timeoutMs) noexcept
     }
 }
 
+// bodyLen 上限 24：应答总长 = 7（外壳）+ 1（状态码）+ body ≤ 32，见设计文档 §0.1
 void Session::reply(uint8_t cmd, uint8_t code, const void* body, uint16_t bodyLen) noexcept
 {
-    uint8_t pay[16];
+    uint8_t pay[25];
 
+    if (bodyLen > (sizeof(pay) - 1U)) {
+        return;                                 // 越界的应答宁可不发，也不能踩栈
+    }
     pay[0] = code;
     if (bodyLen > 0U && body != nullptr) {
         std::memcpy(&pay[1], body, bodyLen);
@@ -464,11 +282,6 @@ void Session::reply(uint8_t cmd, uint8_t code, const void* body, uint16_t bodyLe
         return;
     }
     (void)uartWrite(tx_, n);
-
-    if (n <= sizeof(lastReply_)) {              // 留一份用于幂等重发
-        std::memcpy(lastReply_, tx_, n);
-        lastReplyLen_ = static_cast<uint16_t>(n);
-    }
 }
 
 void Session::replyCode(uint8_t cmd, uint8_t code) noexcept
@@ -554,10 +367,14 @@ void Session::onData(const proto::Frame& f) noexcept
         return;
     }
 
-    if (addr < nextAddr_) {                     // 重复帧（上次应答丢了）：不重写，重发上次应答
-        if (lastReplyLen_ > 0U) {
-            (void)uartWrite(lastReply_, lastReplyLen_);
-        }
+    if (addr < nextAddr_) {                     // 重复帧（上次应答丢了）：不重写，重发应答
+        // 这里**按当前状态重建**应答，而不是"存一份上次应答再原样发回"。
+        // 存副本的做法有个真板实测出来的坑：那个缓冲是全局的，任何一条别的命令
+        // （STATUS 查询、未知命令）都会把它覆盖 —— 主机随后重传数据帧时，
+        // 收到的是那条命令的应答（命令码对不上），于是主机只能超时重试。
+        // crc_ 与 nextAddr_ 只在「帧被接受」时推进，所以按它们重建的结果与
+        // 上次成功应答逐字节相同，而且天然幂等。
+        replyData(static_cast<uint8_t>(Code::Ok));
         return;
     }
     if (addr != nextAddr_) {                    // 跳号：告诉主机从哪里续发
@@ -668,7 +485,6 @@ Session::Result Session::run(uint32_t waitStartMs) noexcept
     state_      = State::Idle;
     erased_     = false;
     done_       = false;
-    lastReplyLen_ = 0U;
     crc_.reset();
     parser_.reset();
     uartFlushRx();                              // 清接收路径并打开接收中断
@@ -815,11 +631,7 @@ bool layoutCheck() noexcept
 
 [[noreturn]] void blEntry() noexcept
 {
-    // 芯片已由宿主初始化好（时钟 / 串口 / Flash 接口时钟），这里只做自检
-    if (!ok(selfTest())) {
-        fatal("selftest failed");
-    }
-
+    // 芯片已由宿主初始化好（时钟 / 串口 / Flash 接口时钟）
     BL_LOG("\r\n== Bootloader-Everywhere == flash %lu KB, app 0x%08lX + %lu KB\r\n",
            static_cast<unsigned long>(BL_FLASH_SIZE / 1024U),
            static_cast<unsigned long>(BL_APP_BASE),

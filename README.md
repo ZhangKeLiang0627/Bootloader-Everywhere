@@ -32,6 +32,7 @@
 | 想改 Flash 分区 / 超时 | [`Bootloader/bl_config.h`](Bootloader/bl_config.h) |
 | 想改帧协议 / 载体层 | [`Bootloader/protocol.cpp`](Bootloader/protocol.cpp) |
 | 想改升级流程 / 启动决策 | [`Bootloader/bl.cpp`](Bootloader/bl.cpp) |
+| 想改日志 / 开关日志 | [`Bootloader/bl_log.h`](Bootloader/bl_log.h) |
 | 想用网页刷机 | 上面的在线地址，或 web 分支的 `docs/` |
 | 想跑板端回归测试 | `TestApp/tools/test_proto.py`（test-app 分支） |
 | **接手开发（人或 AI）** | [`AGENTS.md`](AGENTS.md) |
@@ -42,7 +43,7 @@
 ## 仓库里有什么
 
 ```
-Bootloader/        ★ 就是这个库，7 个源文件，没有子目录
+Bootloader/        ★ 就是这个库，9 个源文件，没有子目录
 tools/             开发工具：编译量体积（build.py）、板端操作（board.py）
 AGENTS.md          给接手的人 / AI 的完整说明
 USER.md            给使用者的快速上手

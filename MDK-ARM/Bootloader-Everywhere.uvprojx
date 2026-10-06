@@ -399,6 +399,11 @@
               <FilePath>..\Bootloader\bl.cpp</FilePath>
             </File>
             <File>
+              <FileName>bl_log.cpp</FileName>
+              <FileType>8</FileType>
+              <FilePath>..\Bootloader\bl_log.cpp</FilePath>
+            </File>
+            <File>
               <FileName>protocol.cpp</FileName>
               <FileType>8</FileType>
               <FilePath>..\Bootloader\protocol.cpp</FilePath>

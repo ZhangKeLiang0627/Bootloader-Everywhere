@@ -23,10 +23,12 @@
 ```
 README.md              入口导航（"从哪开始"）
 AGENTS.md / USER.md    给 AI / 给使用者
-Bootloader/            ★ 库本体，7 个源文件，0 子目录
+Bootloader/            ★ 库本体，9 个源文件，0 子目录
   README.md              库的唯一文档（提交机制 / 用法 / 移植 / 常见坑）
   bl.h                   对外头文件：blRun() + blUartRx() + Status（C 工程也能 include）
-  bl.cpp                 主体：日志 / CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+  bl.cpp                 主体：CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+  bl_log.h               日志：开关（BL_DEBUG_LOG / BL_LOG_DURING_TRANSFER）+ BL_LOG 宏
+  bl_log.cpp             日志实现：轻量格式化，不依赖 stdio，只调 uartWrite
   protocol.h             载体层：Frame / Parser / encode / crc8（与业务无关，可整对拷走）
   protocol.cpp           载体层实现：0xA5 帧编解码 + CRC8
   bl_port.h              移植契约（12 个函数 + 扇区表）
@@ -40,6 +42,8 @@ Core/ Drivers/ MDK-ARM/ Bootloader-Everywhere.ioc
 UserApp/main.cpp       本工程自己的代码入口（见 §2.1）
 docs/                  设计文档
   PROTOCOL_DESIGN.md     协议设计：§0 是现行 0xA5 帧协议的规格与实现要点
+  PERF_COMPARISON.md     性能对比：与 YMODEM / esptool / mcumgr / OpenBLT / UDS 的
+                         帧开销、端到端耗时与能力对比，含优化清单
 TestApp/               （仅 test-app 分支）测试 APP + 板端测试脚本
 build/                 编译产物
 ```
@@ -157,12 +161,18 @@ python tools/build.py --all      # 各芯片 × 各优化等级对比
 ### 4.3 真板回归（test-app 分支）
 
 ```bash
-python TestApp/build_app.py --fail 0     # 正常固件 app_test.bin
-python TestApp/tools/test_auto.py        # 跑 T1-T5，逐项判 PASS/FAIL
+python TestApp/build_app.py --fail 0                      # 正常固件 app_test.bin
+python TestApp/tools/test_proto.py                        # 正常路径 T1-T5
+python TestApp/tools/test_proto_edge.py                   # 边界与畸形输入 E1-E15
+python TestApp/tools/test_proto_perf.py --sizes 2,64,200  # 耗时实测（KB）
 ```
 
-测试项：T1 正常升级并跳转 / T2 连续升级 x5 / T3 软复位唤回进窗口 /
-T4 窗口超时跳回 APP / T5 传输中断（探针验证 SP/PC 仍是 `0xFFFFFFFF` 且数据已写入）。
+测试项：
+- T1 正常升级并跳转 / T2 连续升级 x5 / T3 传输中断不变砖 /
+  T4 篡改帧被拒且可恢复 / T5 跳号被拒并给出续传点
+- E1-E15 边界与畸形输入（超大固件 / 极小固件 / 向量表非法 / 各类字段不一致 /
+  载体层丢帧 / 坏固件被提交后仍能恢复），**每条都断言被拒绝时 APP 区未被改动**
+- 实测耗时与优化空间见 `docs/PROTOCOL_DESIGN.md` §0.7
 
 **库改动后必须上板跑一遍**，不能只靠编译通过。
 
@@ -221,11 +231,12 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
 | 串口 backdoor（上电 300ms 内按 DEL 进 IAP） | 鸡肋：拖慢每次启动，正常人也卡不准。**别和「按住硬件按钮上电」搞混 —— 那个是保留功能（§3.2），一起删掉就少了一条救命通道** |
 | RAM 标志（APP 写 magic 后软复位） | 被「纯复位原因」取代，APP 侧零侵入 |
 | 库自带 `main()` / `chipInit` / `flashInit` / `uartInit` | 库不初始化芯片、不带 main（§1） |
-| `uartTryGetc` / `uartsSetBaudrate` / `verifyImage` / `VectorCheck` | 死代码 |
+| `uartTryGetc` / `uartSetBaudrate` / `verifyImage` / `VectorCheck` | 死代码 |
 | `blRequestUpdate` / `BL_BOOT_MAGIC_STRING`（库内） | APP 侧接口不进库，示例放 `USER.md` |
 | `FwState` / `IapResult::NoSpace` / `ResetCause::BrownOut,LowPower` | 不再使用 |
 | 文件头大块注释 + 三行分节 banner | 用户要求：改成单行 `//` 标题 |
 | 启动时整镜像 CRC（需存 size/crc32） | 用户明确决定：**只在烧录末尾回读校验**就够，不为它保留存储（漏掉的只是刷完之后才发生的 Flash 位翻转） |
+| 固件自带的上电自检 `selfTest()`（+ `Crc32::kCheck`、`Status::Protocol`） | 用户明确要求：**向量校验留在测试侧**（PC 单测 / `proto.py selftest` / JS node 测试），**不上库**。它只在启动时跑一次却占 248 B ROM。固件侧的一致性由端到端升级强制保证 —— 主机与从机各算一遍整片 CRC32，必须逐位相同 |
 
 ---
 
@@ -252,6 +263,15 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
    里再定义一次
 10. **`bl.h` 要能被 C 包含**：C++ 部分（`namespace bl`）必须在 `#ifdef __cplusplus` 里，
    且用 `<stdint.h>` 而不是 `<cstdint>`
+11. **`target.write_memory_block8()` 改不了 Flash**：实测对本芯片的 Flash 地址
+   **完全不生效**（写完读回内容不变）—— Flash 只能 1→0，未经擦除写不进去，而
+   pyocd 的内存写路径也不会自动走 Flash 编程算法。改 Flash 只有两条路：擦扇区
+   （`FlashEraser`）或烧 hex/bin（`FileProgrammer`）。
+   本项目因此踩过一个**测试假阳性**：用「写 `0xFF`」来清向量表其实是空操作，而设备
+   被探针复位带进了 15 秒窗口、STATUS 有应答，于是测试误判成「已恢复」
+12. **探针复位会置 `SFTRSTF`**：`reset_and_halt()` 让设备被判成「软件复位」→ 进 15 秒
+   唤回窗口。所以「复位后是否停 IAP」不能只看 STATUS 有没有应答（窗口期内也有），
+   要抓串口启动日志看 `decision: ...` 那一行来区分
 
 ---
 
@@ -287,7 +307,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>
   `Parser` 与 `readFrame()` 都会校验，长度可疑的帧直接丢、让主机重传。
 - 传输层**中断接收**：`uartRxIrqHandler` + 512 B 环形缓冲，寄存器实现，不用 HAL_UART。
   宿主只需在 `USART1_IRQHandler` 里调 `blUartRx()`，**不要**再调 `HAL_UART_IRQHandler`。
-- 上位机 `TestApp/tools/proto.py`；板端回归 `TestApp/tools/test_proto.py`（T1-T5）。
+- 上位机 `TestApp/tools/proto.py`；板端测试四个脚本：`test_proto.py`（T1-T5 正常路径）、
+  `test_proto_edge.py`（E1-E15 边界与畸形输入）、`test_proto_perf.py`（耗时实测）、
+  `stress_iap.py`（S1-S13 压测：连续升级 / 逐帧错误注入 / 应答丢失幂等 /
+  重放污染探测 / 跳号续传 / 背靠背会话 / 突发帧 / 空闲超时 / END 整片回读校验）。
+  载体层另有 PC 侧压测 `tools/stress_protocol.cpp`（fuzz + 突变 + 恢复能力）。
+- 性能对比（与 YMODEM / esptool / mcumgr / OpenBLT / UDS）见 `docs/PERF_COMPARISON.md`：
+  纯协议效率不是瓶颈（换成最省的 YMODEM 也只快 1.2 秒/200KB），
+  **波特率是唯一的数量级杠杆**（实测 3.5-4.3 倍），块大小在高速下才重要。
 
 > ⚠️ **不要再引入 YMODEM**（实现已整体删除）。"任何第三方工具都能刷"这个便利性是有意
 > 放弃的 —— 换来了可读的帧格式、精确的错误定位与可扩展的命令空间，代价见设计文档「代价与风险」。
@@ -308,5 +335,9 @@ web-v2        从 web 拉出，把网页适配到新协议（进行中）
 `main` 等分支的固件只能被旧网页刷。别把协议改动直接同步过去。
 
 - `protocol-v2` 合回 `main` / `test-app` 之前，先确认 `web-v2` 能用（否则线上刷机页会失效）
-- 协议层改动要同步三处实现：固件 `protocol.cpp`、上位机 `proto.py`、网页 `web-v2` ——
-  三处的 `selftest` 必须给出相同的向量结果
+- 协议层改动要同步三处实现：固件 `protocol.cpp`、上位机 `proto.py`、网页 `web-v2`
+- 上位机侧的 `selftest` 有三份，**必须给出相同的向量结果**：PC 单测
+  `tools/test_protocol.cpp`（C）、`proto.py selftest`（Python）、
+  `tools/test_protocol_js.mjs`（JS）
+- **固件侧没有 selftest**（§7）：它的一致性靠端到端强制保证 —— 真板升级时主机
+  （Python/JS）与从机（C）各算一遍整片 CRC32，必须逐位相同才提交，一侧漂了第一次升级就失败

@@ -1,6 +1,7 @@
 // STM32F4 的移植实现 —— 换芯片时照这份再写一个。
 // 库只调 bl_port.h 声明的函数，一行都不会碰这里；外设初始化由宿主工程负责。
 
+#include "bl_log.h"
 #include "bl_port.h"
 #include "stm32f4xx_hal.h"
 

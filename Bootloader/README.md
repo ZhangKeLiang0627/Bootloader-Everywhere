@@ -12,18 +12,21 @@
 ```
 Bootloader/
 ├── bl.h                 对外头文件：blRun() + blUartRx() + Status（C 工程也能 include）
-├── bl.cpp               主体：日志 / CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+├── bl.cpp               主体：CRC32 / 向量表校验 / IAP 命令 / 决策 / 入口
+├── bl_log.h             日志：开关 + BL_LOG 宏 + 接口声明
+├── bl_log.cpp           日志实现：轻量格式化，不依赖 stdio
 ├── protocol.h           载体层：Frame / Parser / encode / crc8（与业务无关）
 ├── protocol.cpp         载体层实现：0xA5 帧编解码 + CRC8
 ├── bl_port.h            移植契约：12 个函数 + 一张扇区表
 ├── bl_port_stm32f4.cpp  STM32F4 现成实现（换芯片照它再写一份）
-└── bl_config.h          分区参数 + 协议参数 + 日志开关
+└── bl_config.h          分区参数 + 协议参数
 ```
 
-没有子目录。**要用库 = 拷这 7 个源文件**（头文件是声明，按需要拷）。
+没有子目录。**要用库 = 拷这 9 个源文件**（头文件是声明，按需要拷）。
 
 `protocol.*` 是**通用载体层** —— 只依赖 `stdint.h`，不认识芯片也不认识业务，
-可以整对拷到 APP、上位机、别的工程里复用。改帧格式看 `protocol.*`，改升级流程看 `bl.cpp`。
+可以整对拷到 APP、上位机、别的工程里复用。改帧格式看 `protocol.*`，改升级流程看 `bl.cpp`，
+改日志看 `bl_log.*`。
 
 帧长必须落在 `[proto::kFrameMin, proto::kFrameMax]`（**7 - 1031 字节**，空载荷帧到满载荷帧）。
 `Parser` 与 `Frame::lenOk()` 都会校验：长度字段被噪声改坏时直接丢帧，让主机重传。
