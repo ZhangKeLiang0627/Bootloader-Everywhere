@@ -1,5 +1,10 @@
 # Bootloader-Everywhere
 
+> ⚠️ **本分支已停用（不再是 GitHub Pages 发布源）。**
+> 线上页现在发布自 **`web-v2` 分支的 `docs/`**（0xA5 帧版）。
+> 本分支保留**旧协议（YMODEM）版本**的页面与库代码，仅作历史参考；
+> 新协议的库与测试在 `protocol-v2` / `web-v2`。
+
 串口 IAP Bootloader，做成**可搬走的库**，外加一个能一键刷机的网页上位机。
 任何时刻断电都不会变砖。
 
