@@ -1,28 +1,32 @@
 # 网页上位机
 
 纯前端、零后端的串口升级工具。用浏览器的 **Web Serial API** 直接操作串口，
-把编译好的 `.bin` 按自定义 **0xA5 帧协议**发给开发板 —— 也就是 `protocol-v2` /
-`web-v2` 分支上那套固件用的协议。部署到 GitHub Pages 后，有网、有 Chrome/Edge
-的地方就能刷固件。
+把编译好的 **`.bin` 或 `.hex`** 按自定义 **0xA5 帧协议**发给开发板 —— 也就是
+`protocol-v2` / `web-v2` 分支上那套固件用的协议。部署到 GitHub Pages 后，
+有网、有 Chrome/Edge 的地方就能刷固件。
 
 ## 文件
 
 ```
 docs/
-├── index.html        页面骨架
-├── css/style.css     样式（浅色/深色自适应）
+├── index.html           页面骨架
+├── css/style.css        样式（浅色/深色自适应）
 ├── js/
-│   ├── protocol.js   载体层 + IAP 客户端（与固件 protocol.cpp、proto.py 同口径）
-│   └── app.js        Web Serial 适配 + 界面逻辑
-└── PROTOCOL_DESIGN.md  协议规格（§0 是现行设计）
+│   ├── protocol.js      载体层 + IAP 客户端（与固件 protocol.cpp、proto.py 同口径）
+│   ├── hex.js           Intel HEX 解析（.hex → 从 APP 区起点开始的镜像）
+│   └── app.js           Web Serial 适配 + 界面逻辑
+├── PROTOCOL_DESIGN.md   协议规格（§0 是现行设计）
+└── PERF_COMPARISON.md   与其他 IAP/OTA 方案的性能对比
 ```
 
-`protocol.js` **不依赖浏览器**（只用标准 API），可以在 Node 里直接跑单测。
-三处实现（固件 C++ / 命令行 Python / 网页 JS）共用同一组测试向量：
+`protocol.js` 与 `hex.js` **都不依赖浏览器**（只用标准 API），可以在 Node 里直接跑单测。
+载体层是三处实现共用同一组向量（固件 C++ / 命令行 Python / 网页 JS）：
 
 ```bash
 node tools/test_protocol_js.mjs          # 载体层：CRC8 / CRC32 / 组帧 / 解析 / 重同步 / 帧长自检
 node tools/test_iap_sim.mjs              # IAP 逻辑：用虚拟从机跑完 START → DATA → END
+node tools/test_hex.mjs                  # .hex 解析：手工向量 / 往返 / 错误用例 / 与真实 Keil 产物比对
+node tools/test_ui.mjs                   # 页面冒烟（headless Chrome）：表单状态 + .hex 选择流程 + 布局
 python TestApp/tools/proto.py selftest   # Python 侧同一组向量
 ```
 
@@ -64,7 +68,13 @@ legacy source 只能指仓库根目录或 `/docs`，所以页面必须待在这�
 - **必须用 Chrome / Edge**（Firefox / Safari 不支持 Web Serial）。
 - **波特率固定 115200**，由固件写死、不做协商 —— 页面里也去掉了选择项，
   因为选了别的值只会连不上。
-- **从机地址**对应固件里的 `BL_DEVICE_ID`（默认 1）。页面上可以改，用于多从机场景。
+- **从机地址**对应固件里的 `BL_DEVICE_ID`（默认 1），用右侧的 `−/+` 步进器或直接输入，
+  范围 1 - 127。连上串口后会被锁住（中途改地址没有意义，协议层也不会重新协商）。
+- **固件支持 `.bin` 与 `.hex`**。`.hex` 在本地先解析：记录之间的空洞按 0xFF 填充
+  （等价于「那些字节不写」），并校验**起始地址必须是 `0x08004000`** —— 编错地址会在
+  选文件的那一步就报出来（框变红 + 写明实际地址与原因），不必等板子拒绝。
+  `.bin` 里没有地址信息，只能按这个约定信任。
+  解析结果会与 Keil `fromelf --bin` 的输出逐字节一致（`tools/test_hex.mjs` 用真实产物验过）。
 - 板子不必预先处于 IAP：点「开始升级」会先发关键字 `#Bootloader-Everywhere`
   把 APP 唤回 Bootloader（软复位进 15s 限时窗口），然后自动开始传输。
   板子本来就在 IAP 时，这些关键字字节会被当成帧间噪声丢掉，无害。

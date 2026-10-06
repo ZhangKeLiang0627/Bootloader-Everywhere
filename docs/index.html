@@ -29,29 +29,37 @@
     <div class="row">
       <button id="btnConnect" class="primary">连接串口</button>
       <button id="btnDisconnect" disabled>断开</button>
-      <label class="inline">从机地址
-        <input type="number" id="devId" value="1" min="1" max="127">
-      </label>
+
+      <div class="stepper" id="idStepper">
+        <label class="stepper-label" for="devId">从机地址</label>
+        <button type="button" class="step" id="idDown" aria-label="减小从机地址">−</button>
+        <input type="number" id="devId" value="1" min="1" max="127"
+               inputmode="numeric" aria-label="从机地址">
+        <button type="button" class="step" id="idUp" aria-label="增大从机地址">+</button>
+      </div>
     </div>
     <p class="hint">
       波特率由固件写死 115200，不做协商 —— 选了别的值反而连不上。
-      从机地址对应固件里的 <code>BL_DEVICE_ID</code>，默认 1。
+      从机地址对应固件里的 <code>BL_DEVICE_ID</code>，默认 1，只有地址匹配的板子才会应答。
     </p>
   </section>
 
   <section class="card">
     <div class="card-head">
       <h2><span class="num">2</span> 固件</h2>
+      <span class="stat" id="fwStat"></span>
     </div>
     <div class="dropzone" id="dropzone">
-      <input type="file" id="file" accept=".bin" hidden>
+      <input type="file" id="file" accept=".bin,.hex" hidden>
       <div class="dz-icon" id="dzIcon">⇪</div>
-      <p class="dz-text" id="dzText">点击选择固件，或拖拽 .bin 文件到这里</p>
+      <p class="dz-text" id="dzText">点击选择固件，或拖拽 .bin / .hex 文件到这里</p>
       <p class="dz-file" id="dzFile"></p>
     </div>
     <p class="hint">
       固件需编译到 <code>0x08004000</code> 起始 —— Bootloader 占用前 16&nbsp;KB，
       APP 的 IROM 起点与向量表偏移都要跟着对齐。
+      选 <code>.hex</code> 时本页会先解析：记录之间的空洞按 0xFF 填充，
+      并校验起始地址，编错地址会在这里直接报出来，不必等板子拒绝。
     </p>
   </section>
 

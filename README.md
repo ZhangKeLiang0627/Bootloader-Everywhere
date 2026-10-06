@@ -54,6 +54,8 @@
 | `TestApp/tools/test_proto_edge.py` | 真板边界与畸形输入 E1-E15 | 16/16 |
 | `TestApp/tools/stress_iap.py` | 真板压测 S1-S13 | 13/13 |
 | `TestApp/tools/test_proto_perf.py` | 2K - 496K 固件耗时实测 | 见 `docs/PERF_COMPARISON.md` |
+| `tools/test_hex.mjs` | 网页端 `.hex` 解析：向量 / 往返 / 错误用例 / 与真实 Keil 产物比对 | 53 项断言 0 失败 |
+| `tools/test_ui.mjs` | 网页端冒烟（headless Chrome）：表单状态 / `.hex` 选择流程 / 布局 | 40 项断言 0 失败 |
 
 真板测试项（STM32F401RET6）—— 括号里是它验证的那一层防线：
 

@@ -190,15 +190,82 @@ h2 .num {
     flex-wrap: wrap;
 }
 
-label.inline {
+/* ---- 从机地址：胶囊 + 步进器 ----
+ * 原来这个字段用的是浏览器默认外观（样式表只覆盖了 select / file，漏了 number），
+ * 所以看着很突兀。这里做成一个整体自洽的小控件：label 灰、数字粗、−/+ 圆形按钮，
+ * 聚焦时整圈高亮。 */
+.stepper {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 2px;
+    padding: 4px 5px 4px 13px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    transition: border-color .15s, box-shadow .15s, opacity .15s;
+}
+.stepper:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.stepper.disabled { opacity: .5; }
+
+.stepper-label {
+    margin-right: 6px;
+    font-size: 12.5px;
     color: var(--fg-dim);
-    font-size: 13px;
+    white-space: nowrap;
 }
 
-select, input[type="file"] {
+.stepper input[type="number"] {
+    width: 2.6rem;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+.stepper input[type="number"]:focus { outline: none; box-shadow: none; }
+.stepper input[type="number"]::-webkit-outer-spin-button,
+.stepper input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.step {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--fg-dim);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background .12s, color .12s;
+}
+.step:hover:not(:disabled) {
+    filter: none;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+}
+.step:active:not(:disabled) { transform: none; }
+.step:disabled { opacity: .3; cursor: not-allowed; }
+
+/* ---- 表单控件 ---- */
+select, input[type="file"], input[type="text"] {
     background: var(--bg);
     color: var(--fg);
     border: 1px solid var(--border);
@@ -208,7 +275,7 @@ select, input[type="file"] {
     font-size: 13px;
     transition: border-color .15s, box-shadow .15s;
 }
-select:focus, input[type="file"]:focus {
+select:focus, input[type="file"]:focus, input[type="text"]:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
@@ -358,8 +425,30 @@ button.tiny {
     color: var(--accent);
     font-variant-numeric: tabular-nums;
     word-break: break-all;
+    line-height: 1.5;
 }
 .dz-file:empty { display: none; }
+
+/* 解析中的短暂态：避免用户以为点了没反应 */
+.dropzone.busy { opacity: .6; pointer-events: none; }
+
+/* 已选好（解析通过）*/
+.dropzone.picked {
+    border-style: solid;
+    border-color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 6%, transparent);
+}
+.dropzone.picked .dz-icon,
+.dropzone.picked .dz-file { color: var(--ok); }
+
+/* 文件不可用（地址不对 / 格式错 / 超限）—— 错误信息直接写在框里 */
+.dropzone.invalid {
+    border-style: solid;
+    border-color: var(--err);
+    background: color-mix(in srgb, var(--err) 6%, transparent);
+}
+.dropzone.invalid .dz-icon { color: var(--err); }
+.dropzone.invalid .dz-file { color: var(--err); font-weight: 500; }
 
 /* ---- 提示 ---- */
 .hint {

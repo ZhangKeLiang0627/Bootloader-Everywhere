@@ -1,19 +1,27 @@
 /**
  * Bootloader-Everywhere 网页上位机
  *
- * 用 Web Serial API 直接操作串口，把编译好的 .bin 按自定义 0xA5 帧协议
+ * 用 Web Serial API 直接操作串口，把编译好的 .bin / .hex 按自定义 0xA5 帧协议
  * （框架见 ./protocol.js，规格见 ../PROTOCOL_DESIGN.md §0）发给板子。
  * 纯前端、无后端，直接挂 GitHub Pages —— 有网的地方打开就能刷固件。
+ *
+ * .hex 由 ./hex.js 解析：它还带地址信息，所以能在本地就把「编错起始地址」挡住，
+ * 比让板子回一个错误码早得多。
  *
  * 浏览器要求：Chrome / Edge 89+（Web Serial API），且页面在安全上下文
  * （https:// 或 localhost）。
  */
 
-import { Iap, selftest } from './protocol.js';
+import { Iap, selftest, getLe32 } from './protocol.js';
+import { parseHex, describeHex } from './hex.js';
 
 const $ = (id) => document.getElementById(id);
 
 const DEFAULT_BAUD = 115200;      // 与固件一致，协议里是定死的（不做波特率协商）
+const APP_BASE = 0x08004000;      // 与固件 BL_APP_BASE / Iap 默认 appBase 一致
+const APP_SIZE = 496 * 1024;      // F401 512 KB：Bootloader 16 KB + APP 496 KB
+const MIN_ID = 1;
+const MAX_ID = 127;
 
 // ------------------------------------------------------------------ 状态
 
@@ -23,6 +31,7 @@ let reader = null;
 let readLoopRunning = false;
 let iap = null;
 let busy = false;
+let firmware = null;              // { kind, name, data, note }
 
 // ------------------------------------------------------------------ 日志
 
@@ -42,6 +51,13 @@ function log(msg, kind = 'info') {
 }
 
 function clearLog() { $('log').innerHTML = ''; }
+
+const hex8 = (v) => (v >>> 0).toString(16).toUpperCase().padStart(8, '0');
+
+function fmtSize(n) {
+    const kb = n / 1024;
+    return kb < 1024 ? `${kb.toFixed(1)} KB` : `${(kb / 1024).toFixed(2)} MB`;
+}
 
 // ------------------------------------------------------- 板子日志（文本）
 
@@ -64,6 +80,41 @@ function showText(bytes) {
     }
 }
 
+// ------------------------------------------------------------ 按钮状态
+
+// 所有禁用状态集中在一处 —— 之前散在 setConnected / setBusy / 文件选择里，
+// 加了「必须选好固件才能发」这个条件后很容易漏掉一条路径。
+function refreshButtons() {
+    const connected = !!port;
+    const locked = busy || connected;        // 连接期间不允许改从机地址
+    $('btnConnect').disabled = busy || connected;
+    $('btnDisconnect').disabled = !connected || busy;
+    $('btnSend').disabled = !connected || busy || !firmware;
+    $('btnSend').textContent = busy ? '发送中…' : '开始升级';
+    $('devId').disabled = locked;
+    $('idDown').disabled = locked;
+    $('idUp').disabled = locked;
+    $('idStepper').classList.toggle('disabled', locked);
+}
+
+// ------------------------------------------------------------ 从机地址
+
+function setId(v) {
+    let n = parseInt(v, 10);
+    if (Number.isNaN(n)) n = 1;
+    n = Math.min(MAX_ID, Math.max(MIN_ID, n));
+    $('devId').value = String(n);
+    return n;
+}
+
+function stepId(delta) {
+    setId(parseInt($('devId').value, 10) + delta);
+}
+
+function deviceId() {
+    return setId($('devId').value);
+}
+
 // ------------------------------------------------------------ Web Serial
 
 async function connect() {
@@ -83,8 +134,10 @@ async function connect() {
 
     writer = port.writable.getWriter();
     makeIap();
-    setConnected(true);
-    log(`串口已连接 @ ${DEFAULT_BAUD} 8N1`, 'ok');
+    refreshButtons();
+    $('status').textContent = '已连接';
+    $('status').className = 'badge on';
+    log(`串口已连接 @ ${DEFAULT_BAUD} 8N1，从机地址 ${deviceId()}`, 'ok');
     startReadLoop();
 }
 
@@ -93,20 +146,11 @@ function makeIap() {
         write: async (bytes) => { await writer.write(bytes); },
         pump: (ms) => new Promise((r) => setTimeout(r, ms)),
     }, {
-        deviceId: parseInt($('devId').value, 10) || 1,
+        deviceId: deviceId(),
         onLog: log,
         onProgress: onProgress,
     });
     iap.parser.reset();
-}
-
-function setConnected(on) {
-    $('btnConnect').disabled = on;
-    $('btnDisconnect').disabled = !on;
-    $('btnSend').disabled = !on || busy;
-    $('devId').disabled = on;
-    $('status').textContent = on ? '已连接' : '未连接';
-    $('status').className = 'badge ' + (on ? 'on' : 'off');
 }
 
 async function disconnect() {
@@ -117,7 +161,9 @@ async function disconnect() {
     port = null;
     iap = null;
     textPending = '';
-    setConnected(false);
+    refreshButtons();
+    $('status').textContent = '未连接';
+    $('status').className = 'badge off';
     log('串口已断开', 'dim');
 }
 
@@ -150,9 +196,7 @@ function stopReadLoop() { readLoopRunning = false; }
 
 function setBusy(on) {
     busy = on;
-    $('btnSend').disabled = on || !port;
-    $('btnConnect').disabled = on || !!port;
-    $('btnSend').textContent = on ? '发送中…' : '开始升级';
+    refreshButtons();
 }
 
 function onProgress(done, total) {
@@ -163,22 +207,20 @@ function onProgress(done, total) {
 }
 
 async function doSend() {
-    const f = $('file').files && $('file').files[0];
-    if (!f) { log('请先选择一个 .bin 文件', 'err'); return; }
+    if (!firmware) { log('请先选择一个固件（.bin 或 .hex）', 'err'); return; }
     if (!port) { log('请先连接串口', 'err'); return; }
 
+    const fw = firmware;
     setBusy(true);
     $('bar').style.width = '0%';
     $('bar').textContent = '0%';
     $('stat').textContent = '';
 
     try {
-        const raw = new Uint8Array(await f.arrayBuffer());
-
         // 板子可能正在跑 APP，先把它唤回 Bootloader（也可以从 App 菜单改）
         await iap.recall();
 
-        const r = await iap.send(raw, { name: f.name });
+        const r = await iap.send(fw.data, { name: fw.name });
         if (r.ok) {
             log(`升级完成：${r.frames} 帧，重传 ${r.retries} 次，板端确认 ${r.written} 字节`, 'ok');
             $('bar').style.width = '100%';
@@ -194,31 +236,101 @@ async function doSend() {
     }
 }
 
+// ------------------------------------------------------------ 固件准备
+
+/**
+ * 把用户选的文件变成「从 APP 区起点开始的镜像字节」。
+ *
+ * .hex 自带地址，所以能在这里就校验起始地址与范围；
+ * .bin 没有地址信息，只能按约定信任（起始必须是 0x08004000）。
+ */
+async function prepareFirmware(f) {
+    const lower = f.name.toLowerCase();
+    let data, kind, note;
+
+    if (lower.endsWith('.hex')) {
+        const r = parseHex(await f.text(), { base: APP_BASE, maxSize: APP_SIZE });
+        data = r.data;
+        kind = 'HEX';
+        note = describeHex(r);
+    } else if (lower.endsWith('.bin')) {
+        data = new Uint8Array(await f.arrayBuffer());
+        kind = 'BIN';
+        note = `${fmtSize(data.length)} · 起始地址按 0x08004000 处理`;
+    } else {
+        throw new Error('只支持 .bin 与 .hex —— 其它格式没有地址信息，无法确定烧写位置');
+    }
+
+    if (data.length < 16) {
+        throw new Error(`固件只有 ${data.length} 字节 —— 至少要 16 字节（向量表的前两个字）`);
+    }
+    if (data.length > APP_SIZE) {
+        throw new Error(`固件 ${fmtSize(data.length)}，超过 APP 区上限 ${fmtSize(APP_SIZE)}`);
+    }
+
+    // 向量表预检：与板端 START 的判据一致，但只提示不拦截 —— 权威结论在板子那边
+    const sp = getLe32(data, 0);
+    const pc = getLe32(data, 4);
+    const spOk = sp >= 0x20000000 && sp < 0x20100000 && (sp & 7) === 0;
+    const pcOk = pc >= APP_BASE && pc < APP_BASE + APP_SIZE && (pc & 1) === 1;
+
+    return { kind, name: f.name, data, note, sp, pc, spOk, pcOk };
+}
+
 // ------------------------------------------------------------ 文件选择
+
+function resetZone() {
+    firmware = null;
+    $('dzIcon').textContent = '⇪';
+    $('dzText').textContent = '点击选择固件，或拖拽 .bin / .hex 文件到这里';
+    $('dzFile').textContent = '';
+    $('fwStat').textContent = '';
+    $('dropzone').className = 'dropzone';
+    refreshButtons();
+}
+
+async function selectFile(f) {
+    const dz = $('dropzone');
+    if (!f) { resetZone(); return; }
+
+    dz.className = 'dropzone busy';
+    try {
+        const fw = await prepareFirmware(f);
+        firmware = fw;
+        dz.className = 'dropzone picked';
+        $('dzIcon').textContent = '✓';
+        $('dzText').textContent = f.name;
+        $('dzFile').textContent = fw.note;
+        $('fwStat').textContent = `${fw.kind} · ${fmtSize(fw.data.length)}`;
+        log(`已选择固件：${f.name}（${fw.note}）`, 'info');
+        log(`向量表 SP=0x${hex8(fw.sp)} PC=0x${hex8(fw.pc)}`, 'dim');
+        if (!fw.spOk || !fw.pcOk) {
+            log('⚠ 向量表看起来不对 —— 板端 START 会拒绝。请检查 APP 的 IROM 起点'
+                + '与 SCB->VTOR 是否都改成 0x08004000。', 'warn');
+        }
+    } catch (e) {
+        dz.className = 'dropzone invalid';
+        $('dzIcon').textContent = '!';
+        $('dzText').textContent = f.name;
+        $('dzFile').textContent = e.message;
+        $('fwStat').textContent = '';
+        firmware = null;
+        log(`固件不可用：${e.message}`, 'err');
+    }
+    refreshButtons();
+}
 
 function setupDropzone() {
     const dz = $('dropzone');
     const file = $('file');
-    const dzIcon = $('dzIcon');
-    const dzText = $('dzText');
-    const dzFile = $('dzFile');
-
-    function showFile(f) {
-        if (!f) {
-            dzIcon.textContent = '⇪';
-            dzText.textContent = '点击选择固件，或拖拽 .bin 文件到这里';
-            dzFile.textContent = '';
-            return;
-        }
-        const kb = f.size / 1024;
-        const sizeStr = kb >= 1024 ? (kb / 1024).toFixed(2) + ' MB' : kb.toFixed(1) + ' KB';
-        dzIcon.textContent = '✓';
-        dzText.textContent = f.name;
-        dzFile.textContent = `${sizeStr} · ${f.size.toLocaleString()} 字节`;
-    }
 
     dz.addEventListener('click', () => file.click());
-    file.addEventListener('change', () => showFile(file.files[0]));
+
+    file.addEventListener('change', () => {
+        const f = file.files && file.files[0];
+        file.value = '';                     // 清空才能重复选同一个文件（change 比的是值）
+        void selectFile(f);
+    });
 
     dz.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -230,15 +342,11 @@ function setupDropzone() {
         dz.classList.remove('dragover');
         const f = e.dataTransfer.files && e.dataTransfer.files[0];
         if (!f) return;
-        if (!f.name.toLowerCase().endsWith('.bin')) {
-            log('请选择 .bin 固件文件', 'warn');
+        if (!/\.(bin|hex)$/i.test(f.name)) {
+            log(`不支持 ${f.name} —— 请选择 .bin 或 .hex 固件`, 'warn');
             return;
         }
-        const dt = new DataTransfer();
-        dt.items.add(f);
-        file.files = dt.files;
-        showFile(f);
-        log(`已选择固件：${f.name}`, 'info');
+        void selectFile(f);
     });
 }
 
@@ -250,7 +358,12 @@ window.addEventListener('DOMContentLoaded', () => {
     $('btnSend').addEventListener('click', doSend);
     $('btnClear').addEventListener('click', clearLog);
 
+    $('idDown').addEventListener('click', () => stepId(-1));
+    $('idUp').addEventListener('click', () => stepId(1));
+    $('devId').addEventListener('change', () => setId($('devId').value));
+
     setupDropzone();
+    refreshButtons();
 
     // 页面一打开就在本地跑一遍载体层自检：与固件、Python 上位机共用同一组向量，
     // 三处都过才算 CRC 变体与字节序一致。不一致的话刷机会一帧都过不了。
