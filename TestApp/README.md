@@ -18,7 +18,7 @@ TestApp/
 ├── README.md            本文档
 ├── app_main.c           APP 主体（寄存器直接驱动，不依赖 HAL/CubeMX）
 ├── startup_app.s        启动文件（取自 ST 的标准 startup，栈 4KB / 堆 0）
-├── link_app.sct         链接脚本：整个镜像从 0x08004000 开始，上限 368KB
+├── link_app.sct         链接脚本：整个镜像从 0x08004000 开始，上限 496KB
 ├── build_app.py         构建脚本（armclang + armasm + armlink）
 └── tools/
     ├── proto.py             载体层参考实现 + 命令行升级上位机（网页端的协议参照）
@@ -39,8 +39,8 @@ python TestApp/build_app.py
 依赖 Keil MDK 的 AC6 工具链（`armclang` / `armasm` / `armlink` / `fromelf`）。
 安装路径不同时设置环境变量 `KEIL_ARMCLANG_BIN`。
 
-链接区域卡死在 `0x08004000 + 0x5C000`（= `BL_APP_SIZE`），
-一旦超出，`armlink` 会直接报 `L6406E` —— 不必等上板才发现。
+链接区域卡死在 `0x08004000 + 0x7C000`（= `BL_APP_SIZE`，496 KB），
+一旦超出，`armlink` 直接报区域超限（`L6220E` / `L6406E`）—— 不必等上板才发现。
 
 ## 升级
 
