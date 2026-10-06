@@ -43,15 +43,21 @@ python -m http.server 8080
 
 ## 部署到 GitHub Pages
 
-1. 仓库转 **public**（免费账户的私有仓库开不了 Pages）。
-2. Settings → Pages → Source 选 `Deploy from a branch`：
-   - Branch：`web-v2`（或合并后的 `web`）
-   - Folder：`/docs`
-3. 保存后等一两分钟，地址形如 `https://<user>.github.io/Bootloader-Everywhere/`。
+**已上线：<https://zhangkeliang0627.github.io/Bootloader-Everywhere/>**
 
-> ⚠️ 发布分支决定了线上页面用哪套协议。`web` 分支的页面是 **YMODEM** 版，
-> 只能刷 `main` / `test-app` 上的固件；`web-v2` 的页面是 **0xA5 帧**版，
-> 只能刷 `protocol-v2` 的固件。两套互不兼容，切换发布分支时别搞混。
+发布源 = **`web-v2` 分支的 `/docs`**（仓库 Settings → Pages → Source 选
+`Deploy from a branch`，Branch `web-v2` / Folder `/docs`）。GitHub Pages 的
+legacy source 只能指仓库根目录或 `/docs`，所以页面必须待在这个约定目录里。
+
+改完页面后 `git push origin web-v2`，Pages 会自动重建，一两分钟后刷新即可。
+
+> ⚠️ 发布分支决定了线上页面用哪套协议。现在的线上页是 **0xA5 帧**版，只能刷
+> `web-v2` / `protocol-v2` 上的固件；`web` 分支存的是旧的 **YMODEM** 版页面
+> （**已停用，不再是发布源**）。两套互不兼容，切换时别搞混。
+>
+> `docs/` 里同时放着协议规格（`PROTOCOL_DESIGN.md` / `PERF_COMPARISON.md`）与网页文件，
+> **两者都会被发布** —— 这是有意的（规格有稳定 URL 可引用，本节上面就链到它）。
+> 若不想发布它们，在 `docs/` 下加一个 `_config.yml`，用 Jekyll 的 `exclude` 排除即可。
 
 ## 使用要点
 
