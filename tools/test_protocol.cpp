@@ -1,5 +1,6 @@
-// 载体层 PC 侧单测。与固件里的 frameSelftest() 共用同一组向量：
-// 两端都过，才算「CRC8 变体与字节序两端一致」（设计文档 §0.6.6）。
+// 载体层 PC 侧单测。与 proto.py selftest、docs/js 的 selftest 共用同一组向量：
+// 三份都过，才算「CRC8 变体与字节序在各端一致」（设计文档 §0.6.6）。
+// （固件侧刻意不带自检，一致性由端到端升级的整片 CRC32 双向比对保证。）
 //
 // 编译运行：
 //   g++ -std=c++11 -Wall -I Bootloader tools/test_protocol.cpp Bootloader/protocol.cpp -o t && ./t

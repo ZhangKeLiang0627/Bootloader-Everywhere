@@ -135,8 +135,10 @@ YMODEM / XMODEM / UDS 部分按各自规范逐字段累加。
    可以整对拷到 APP / 上位机 / 别的 MCU 工程（这是为将来「APP 侧也讲这套协议」铺的路）。
 5. **体积**：整份固件 11.1 KB（协议层约 500 B），16 KB 区余量 5.2 KB。
    对照 OpenBLT / MCUboot 都是数十 KB 起。
-6. **上位机自检三处同源**：固件 `selfTest()`、`tools/test_protocol.cpp`、
-   `proto.py selftest` 用**同一组测试向量**，任何一端口径漂了立刻暴露。
+6. **上位机自检三处同源**：`tools/test_protocol.cpp`（C）、`proto.py selftest`（Python）、
+   JS 的 `tools/test_protocol_js.mjs` 用**同一组测试向量**，任何一端口径漂了立刻暴露。
+   固件侧**刻意不带自检**（见 `AGENTS.md` §7，省 248 B ROM）—— 它的一致性由端到端
+   强制保证：升级时主机与从机各算一遍整片 CRC32，必须逐位相同才提交。
 
 ### 5.2 我们输在哪（这才是要正视的）
 

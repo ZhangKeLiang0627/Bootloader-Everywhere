@@ -231,11 +231,12 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
 | 串口 backdoor（上电 300ms 内按 DEL 进 IAP） | 鸡肋：拖慢每次启动，正常人也卡不准。**别和「按住硬件按钮上电」搞混 —— 那个是保留功能（§3.2），一起删掉就少了一条救命通道** |
 | RAM 标志（APP 写 magic 后软复位） | 被「纯复位原因」取代，APP 侧零侵入 |
 | 库自带 `main()` / `chipInit` / `flashInit` / `uartInit` | 库不初始化芯片、不带 main（§1） |
-| `uartTryGetc` / `uartsSetBaudrate` / `verifyImage` / `VectorCheck` | 死代码 |
+| `uartTryGetc` / `uartSetBaudrate` / `verifyImage` / `VectorCheck` | 死代码 |
 | `blRequestUpdate` / `BL_BOOT_MAGIC_STRING`（库内） | APP 侧接口不进库，示例放 `USER.md` |
 | `FwState` / `IapResult::NoSpace` / `ResetCause::BrownOut,LowPower` | 不再使用 |
 | 文件头大块注释 + 三行分节 banner | 用户要求：改成单行 `//` 标题 |
 | 启动时整镜像 CRC（需存 size/crc32） | 用户明确决定：**只在烧录末尾回读校验**就够，不为它保留存储（漏掉的只是刷完之后才发生的 Flash 位翻转） |
+| 固件自带的上电自检 `selfTest()`（+ `Crc32::kCheck`、`Status::Protocol`） | 用户明确要求：**向量校验留在测试侧**（PC 单测 / `proto.py selftest` / JS node 测试），**不上库**。它只在启动时跑一次却占 248 B ROM。固件侧的一致性由端到端升级强制保证 —— 主机与从机各算一遍整片 CRC32，必须逐位相同 |
 
 ---
 
@@ -334,5 +335,9 @@ web-v2        从 web 拉出，把网页适配到新协议（进行中）
 `main` 等分支的固件只能被旧网页刷。别把协议改动直接同步过去。
 
 - `protocol-v2` 合回 `main` / `test-app` 之前，先确认 `web-v2` 能用（否则线上刷机页会失效）
-- 协议层改动要同步三处实现：固件 `protocol.cpp`、上位机 `proto.py`、网页 `web-v2` ——
-  三处的 `selftest` 必须给出相同的向量结果
+- 协议层改动要同步三处实现：固件 `protocol.cpp`、上位机 `proto.py`、网页 `web-v2`
+- 上位机侧的 `selftest` 有三份，**必须给出相同的向量结果**：PC 单测
+  `tools/test_protocol.cpp`（C）、`proto.py selftest`（Python）、
+  `tools/test_protocol_js.mjs`（JS）
+- **固件侧没有 selftest**（§7）：它的一致性靠端到端强制保证 —— 真板升级时主机
+  （Python/JS）与从机（C）各算一遍整片 CRC32，必须逐位相同才提交，一侧漂了第一次升级就失败

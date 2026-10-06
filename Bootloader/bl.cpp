@@ -24,8 +24,7 @@ namespace bl {
 // 与载体层的 CRC8 位序方向相反：这个 LSB-first，那个 MSB-first。
 class Crc32 {
 public:
-    static constexpr uint32_t kInit  = 0xFFFFFFFFU;
-    static constexpr uint32_t kCheck = 0xCBF43926U;      // "123456789"
+    static constexpr uint32_t kInit = 0xFFFFFFFFU;
 
     constexpr Crc32() noexcept : value_(kInit) {}
 
@@ -119,47 +118,6 @@ static Status checkVectors(uint32_t appBase) noexcept
                static_cast<unsigned long>(vec[0]),
                static_cast<unsigned long>(vec[1]));
         return Status::CrcFail;
-    }
-    return Status::Ok;
-}
-
-// 上电自检：CRC32 与载体帧都必须与上位机逐位一致，写错的话在最早时刻暴露
-static Status selfTest() noexcept
-{
-    static constexpr char kVector[] = "123456789";
-
-    Crc32 crc;
-    crc.update(kVector, 9U);
-    if (crc.value() != Crc32::kCheck) {
-        return Status::CrcFail;
-    }
-
-    // 载体帧：A5 01 02 02 00 34 12 12 03（向量见 docs/PROTOCOL_DESIGN.md §0.6.6）
-    static constexpr uint8_t kExpect[] = {
-        0xA5U, 0x01U, 0x02U, 0x02U, 0x00U, 0x34U, 0x12U, 0x12U, 0x03U,
-    };
-    const uint8_t payload[2] = {0x34U, 0x12U};
-    uint8_t       buf[16];
-
-    const uint32_t n = proto::encode(0x01U, 0x02U, payload, 2U, buf, sizeof(buf));
-    if (n != sizeof(kExpect)) {
-        return Status::Protocol;
-    }
-    for (uint32_t i = 0U; i < n; ++i) {
-        if (buf[i] != kExpect[i]) {
-            return Status::Protocol;
-        }
-    }
-
-    proto::Parser parser;
-    proto::Frame  frame;
-    bool got = false;
-    for (uint32_t i = 0U; i < n; ++i) {
-        got = parser.feed(buf[i], frame);
-    }
-    if (!got || frame.id != 0x01U || frame.code() != 0x02U || frame.len != 2U ||
-        frame.data[0] != 0x34U || frame.data[1] != 0x12U) {
-        return Status::Protocol;
     }
     return Status::Ok;
 }
@@ -673,11 +631,7 @@ bool layoutCheck() noexcept
 
 [[noreturn]] void blEntry() noexcept
 {
-    // 芯片已由宿主初始化好（时钟 / 串口 / Flash 接口时钟），这里只做自检
-    if (!ok(selfTest())) {
-        fatal("selftest failed");
-    }
-
+    // 芯片已由宿主初始化好（时钟 / 串口 / Flash 接口时钟）
     BL_LOG("\r\n== Bootloader-Everywhere == flash %lu KB, app 0x%08lX + %lu KB\r\n",
            static_cast<unsigned long>(BL_FLASH_SIZE / 1024U),
            static_cast<unsigned long>(BL_APP_BASE),

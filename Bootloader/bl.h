@@ -17,7 +17,6 @@ enum class Status : int32_t {
     Timeout   = -3,
     FlashFail = -4,
     CrcFail   = -5,
-    Protocol  = -6,
 };
 
 constexpr bool ok(Status s) noexcept { return s == Status::Ok; }
