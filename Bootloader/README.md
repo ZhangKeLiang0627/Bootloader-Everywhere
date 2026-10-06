@@ -3,7 +3,8 @@
 串口 IAP Bootloader，可移植库。给一个 bin 就能刷进 APP 区，**任何时刻断电都不会变砖**。
 
 - 协议：自定义 0xA5 帧（见 `docs/PROTOCOL_DESIGN.md`）；命令行上位机 `TestApp/tools/proto.py`
-- ⚠️ 网页版上位机（`web` 分支）仍是旧的 YMODEM 实现，**与本固件不兼容**；适配版在 `web-v2` 分支
+- 网页上位机与命令行上位机**同源**（同一组测试向量）；在线页
+  <https://zhangkeliang0627.github.io/Bootloader-Everywhere/>（发布自 `web-v2` 的 `docs/`）
 - 库不初始化芯片，也不带 `main()` —— 芯片由宿主工程带起来，库只被 `blRun()` 调一次
 - 不依赖 stdio，不用动态内存，C++11 无异常无 RTTI
 

@@ -287,8 +287,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 署名行前空一行。git 身份用 `kkl / 1184665829@qq.com`。
 
 分支改动要一起同步（`main` / `test-app` / `web`），文档改动尤其别漏。
-新协议在 `protocol-v2` 上开发，网页适配在 `web-v2` —— **两套协议互不兼容**，
-别把协议相关的改动混着同步过去。
+新协议的开发在 `protocol-v2` / `web-v2` 上 —— **两套协议互不兼容**，别把协议相关的
+改动混着同步过去；`web` 分支已停用（不再是 GitHub Pages 发布源，见 §11）。
 
 ---
 
@@ -321,23 +321,30 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ---
 
-## 11. 分支拓扑与合并状态（2026-10-06）
+## 11. 分支拓扑与发布状态（2026-10-06）
 
 ```
-main          库 + STM32F401 示例工程（YMODEM 协议）
-test-app      库 + TestApp/ 测试 APP 与脚本（YMODEM）—— 上板验证都在这个分支做
-web           docs/ 网页上位机（YMODEM），GitHub Pages 从这里发布
-protocol-v2   ★ 新协议（0xA5 帧）：载体层 + IAP 命令层 + 中断接收，真板 T1-T5 已过
-web-v2        从 web 拉出，把网页适配到新协议（进行中）
+web-v2        ★ 0xA5 帧：库 + TestApp + 网页（docs/）—— GitHub Pages 发布源
+protocol-v2     0xA5 帧：库 + TestApp（不含网页）
+main            YMODEM：库 + STM32F401 示例工程
+test-app        YMODEM：库 + TestApp/ 测试 APP 与脚本
+web             YMODEM：旧网页，已停用（不再是发布源）
 ```
 
-**两套协议互不兼容**：`protocol-v2` 的固件只能被 `proto.py` / `web-v2` 刷，
+**两套协议互不兼容**：`protocol-v2` / `web-v2` 的固件只能被线上页或 `proto.py` 刷，
 `main` 等分支的固件只能被旧网页刷。别把协议改动直接同步过去。
 
-- `protocol-v2` 合回 `main` / `test-app` 之前，先确认 `web-v2` 能用（否则线上刷机页会失效）
-- 协议层改动要同步三处实现：固件 `protocol.cpp`、上位机 `proto.py`、网页 `web-v2`
+**GitHub Pages 的发布源 = `web-v2` 分支的 `/docs`**（legacy source，只能指根目录或
+`/docs`，所以页面必须待在这个约定目录里）。改网页的流程就是：改 `web-v2/docs/`
+→ push → Pages 自动重建。`docs/` 里同时放着协议规格与网页文件，**两者都会被发布**
+—— 这是有意的（规格有稳定 URL 可引用，`docs/README.md` 就链到它）；若哪天不想发布，
+在 `docs/` 下加 `_config.yml` 用 Jekyll 的 `exclude` 排除即可。
+
+- 协议层改动要同步三处实现：固件 `protocol.cpp`、命令行 `proto.py`、网页 `docs/js/protocol.js`
 - 上位机侧的 `selftest` 有三份，**必须给出相同的向量结果**：PC 单测
   `tools/test_protocol.cpp`（C）、`proto.py selftest`（Python）、
   `tools/test_protocol_js.mjs`（JS）
 - **固件侧没有 selftest**（§7）：它的一致性靠端到端强制保证 —— 真板升级时主机
   （Python/JS）与从机（C）各算一遍整片 CRC32，必须逐位相同才提交，一侧漂了第一次升级就失败
+- `protocol-v2` 合回 `main` / `test-app` 时，`web-v2` 的网页要一起搬，并把
+  GitHub Pages 的发布源重新指一次 —— 否则新固件没有配套的线上页
