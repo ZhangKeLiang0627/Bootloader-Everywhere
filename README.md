@@ -49,13 +49,13 @@
 | `tools/stress_protocol.cpp` | 载体层压测：fuzz 32MB / 单字节突变 54 万次 / 对抗流 / 恢复能力 | 33 项断言 0 失败 |
 | `TestApp/tools/proto.py selftest` | 与上同源向量（Python 侧） | 全过 |
 | `tools/test_protocol_js.mjs` | 与上同源向量（JS 侧） | 22 项断言 0 失败 |
-| `tools/test_iap_sim.mjs` | 用**虚拟从机**把 IAP 全流程跑一遍（不需要硬件） | 12 项断言 0 失败 |
+| `tools/test_iap_sim.mjs`〔web-v2〕 | 用**虚拟从机**把 IAP 全流程跑一遍（不需要硬件），含「步骤行是否都结算」 | 19 项断言 0 失败 |
 | `TestApp/tools/test_proto.py` | 真板正常路径 T1-T5 | 5/5 |
 | `TestApp/tools/test_proto_edge.py` | 真板边界与畸形输入 E1-E15 | 16/16 |
 | `TestApp/tools/stress_iap.py` | 真板压测 S1-S13 | 13/13 |
 | `TestApp/tools/test_proto_perf.py` | 2K - 496K 固件耗时实测 | 见 `docs/PERF_COMPARISON.md` |
 | `tools/test_hex.mjs` | 网页端 `.hex` 解析：向量 / 往返 / 错误用例 / 与真实 Keil 产物比对 | 53 项断言 0 失败 |
-| `tools/test_ui.mjs` | 网页端冒烟（headless Chrome）：表单状态 / `.hex` 选择流程 / 布局 | 40 项断言 0 失败 |
+| `tools/test_ui.mjs`〔web-v2〕 | 网页端冒烟（headless Chrome）：表单状态 / `.hex` 选择流程 / 日志排版 / 布局，并**跑一次完整升级**看最终日志 | 56 项断言 0 失败 |
 
 真板测试项（STM32F401RET6）—— 括号里是它验证的那一层防线：
 

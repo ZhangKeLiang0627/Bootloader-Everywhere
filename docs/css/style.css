@@ -360,7 +360,15 @@ button.tiny {
     font-variant-numeric: tabular-nums;
 }
 
-/* ---- 日志 ---- */
+/* ---- 日志 ----
+ *
+ * 每条日志是「时间戳列 + 正文列」两列结构。时间戳不能拼进文本里 ——
+ * 那样需要缩进的从属行（步骤结果、帧级细节）会缩到时间戳下面去，看着像错位。
+ *
+ * ⚠️ 日志的 kind 名不要用 `step`：那会命中上面步进器按钮的 `.step` 规则
+ *    （width/height 26px + padding 0 + 胶囊圆角），把整行压成一个小圆球。
+ *    「进行中的步骤」这个 kind 叫 `run`。
+ */
 .log {
     flex: 1;
     overflow-y: auto;
@@ -372,14 +380,36 @@ button.tiny {
     min-height: 160px;
 }
 
-.line { white-space: pre-wrap; word-break: break-all; }
+.line {
+    display: flex;
+    align-items: baseline;
+}
+.line .ts {
+    flex: 0 0 auto;
+    white-space: pre;            /* 保留时间戳后的那个空格，当列间距 */
+    color: var(--fg-dim);
+    opacity: .7;
+}
+.line .tx {
+    flex: 1 1 auto;
+    min-width: 0;                /* 允许收缩，否则长行会把整行撑宽 */
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
 .line.info  { color: var(--code-fg); }
-.line.step  { color: #7ea6ff; font-weight: 600; }
+.line.run   { color: #7ea6ff; }   /* 进行中的步骤（结算后转 ok / err） */
 .line.ok    { color: var(--ok); }
 .line.warn  { color: var(--warn); }
 .line.err   { color: var(--err); }
 .line.dim   { color: var(--fg-dim); }
+
+/* 板子自己的串口输出：左侧一条竖线，与上位机的日志分开，免得混在一起看不清 */
 .line.board { color: var(--board); }
+.line.board .tx::before {
+    content: '│ ';
+    opacity: .55;
+}
 
 /* ---- 固件选择（拖拽区） ---- */
 .dropzone {

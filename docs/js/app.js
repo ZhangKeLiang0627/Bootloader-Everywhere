@@ -35,19 +35,65 @@ let firmware = null;              // { kind, name, data, note }
 
 // ------------------------------------------------------------------ 日志
 
+const LOG_MAX = 2000;
+
+function stamp() {
+    const t = new Date();
+    return `${String(t.getHours()).padStart(2, '0')}:`
+         + `${String(t.getMinutes()).padStart(2, '0')}:`
+         + `${String(t.getSeconds()).padStart(2, '0')}`;
+}
+
+function atBottom(box) {
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+}
+
+/**
+ * 写一条日志。
+ *
+ * 时间戳是独立的一列（`.ts`），不拼进正文 —— 否则需要缩进的从属行（步骤结果、
+ * 帧级细节）会缩到时间戳下面去，看着像错位。
+ *
+ * 注意 kind 不要用 `step`：那是步进器按钮的类名，会命中它的 26px 胶囊样式。
+ * 「进行中的步骤」用 `run`。
+ *
+ * @returns 一个句柄：`settle(mark, note, kind)` 可以**原地结算**这一行，把结果
+ *   并进同一行而不是再起一行。步骤行用它，免得留下一个永远挂着省略号的壳。
+ */
 function log(msg, kind = 'info') {
     const box = $('log');
+    const stick = atBottom(box);                 // 用户在翻历史时别把他拽回底部
+
     const line = document.createElement('div');
     line.className = 'line ' + kind;
-    const t = new Date();
-    const ts = `${String(t.getHours()).padStart(2, '0')}:`
-             + `${String(t.getMinutes()).padStart(2, '0')}:`
-             + `${String(t.getSeconds()).padStart(2, '0')}`;
-    line.textContent = `[${ts}] ${msg}`;
-    box.appendChild(line);
-    box.scrollTop = box.scrollHeight;
 
-    while (box.childElementCount > 2000) box.removeChild(box.firstChild);
+    const ts = document.createElement('span');
+    ts.className = 'ts';
+    ts.textContent = `[${stamp()}] `;
+
+    const tx = document.createElement('span');
+    tx.className = 'tx';
+    tx.textContent = msg;
+
+    line.append(ts, tx);
+    box.appendChild(line);
+    if (stick) box.scrollTop = box.scrollHeight;
+    while (box.childElementCount > LOG_MAX) box.removeChild(box.firstChild);
+
+    let settled = false;
+    return {
+        el: line,
+        settle(mark, note, newKind = 'ok') {
+            if (settled) return;
+            settled = true;
+            tx.textContent = `${mark} ${tx.textContent.replace(/\s*…\s*$/, '')}`
+                           + (note ? `  ${note}` : '');
+            line.classList.remove(kind);
+            line.classList.add(newKind);
+            const parent = line.parentElement;
+            if (parent && atBottom(parent)) parent.scrollTop = parent.scrollHeight;
+        },
+    };
 }
 
 function clearLog() { $('log').innerHTML = ''; }

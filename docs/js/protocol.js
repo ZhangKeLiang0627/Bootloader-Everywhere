@@ -319,7 +319,7 @@ export class Iap {
       if (reply) return reply;
       if (attempt < retries) {
         this.stats.retries++;
-        this.onLog(`${label} 无应答，重试 ${attempt}/${retries}`, 'warn');
+        this.onLog(`↻ ${label} 无应答，重试 ${attempt}/${retries}`, 'dim');
       }
     }
     return null;
@@ -353,17 +353,20 @@ export class Iap {
    * overrun 丢掉大部分字节，状态机凑不齐关键字。
    */
   async recall() {
-    this.onLog('唤回 Bootloader …', 'step');
+    const step = this.onLog('唤回 Bootloader（逐字节发关键字）…', 'run');
     const magic = '#Bootloader-Everywhere';
     for (const ch of magic) {
       try {
         await this.io.write(new Uint8Array([ch.charCodeAt(0)]));
-      } catch (_) {
-        break;
+      } catch (e) {
+        settleStep(step, false, '写串口失败');
+        this.onLog('写串口失败：' + e.message, 'err');
+        return;
       }
       await this.io.pump(150);
     }
     await this.io.pump(this.cfg.recallTimeout);
+    settleStep(step, true, `已发 ${magic.length} 字节，等板子进窗口`);
   }
 
   /** 把数据流（镜像 [8, size)）写进 APP 区。 */
@@ -386,8 +389,8 @@ export class Iap {
     this.onLog(`数据 ${body.length} 字节 / ${totalPkts} 帧 / 整片 CRC32 = 0x${hex8(totalCrc)}`);
 
     // ---- START ----
-    this.onLog('START（板子擦除中，可能数秒）…', 'step');
     const t0 = now();
+    const startStep = this.onLog('START（板子擦除中，可能数秒）…', 'run');
     const startPayload = new Uint8Array(16);
     startPayload.set(putLe32(raw.length), 0);
     startPayload.set(putLe32(totalCrc), 4);
@@ -396,16 +399,25 @@ export class Iap {
 
     let f = await this.request(CMD_START, startPayload, this.cfg.startTimeout, 2, 'START');
     if (!f) {
-      this.onLog('START 无应答 —— 设备没在 IAP？按住按钮上电重试', 'err');
+      settleStep(startStep, false, '无应答');
+      this.onLog('设备没在 IAP？按住 PC0 上电重进 Bootloader，'
+                 + '或确认串口没被别的工具占用', 'err');
       return { ok: false, reason: 'start-no-reply' };
     }
     let code = f.data[0];
     const blk = f.data.length >= 3 ? getLe16(f.data, 1) : 0;
-    this.onLog(`  ← ${codeName(code)}  blockSize=${blk}  (${((now() - t0) / 1000).toFixed(1)} s)`,
-               code === 0 ? 'ok' : 'err');
+    {
+      const dur = ((now() - t0) / 1000).toFixed(1);
+      settleStep(startStep, code === 0,
+                 code === 0 ? `blockSize=${blk} · ${dur} s`
+                            : `${codeName(code)} · ${dur} s`);
+    }
     if (code !== 0) return { ok: false, reason: 'start', code };
 
     // ---- DATA ----
+    const dataStep = this.onLog(`DATA（${totalPkts} 帧 × ${blockSize} 字节，逐帧一应一答）…`,
+                                'run');
+
     // 从机已确认的字节数与对应的累积 CRC32（增量维护，不从头重算）
     let acked = 0;
     let ackedCrc = new Crc32();
@@ -420,6 +432,7 @@ export class Iap {
       // 这时 offset 一直不推进 —— 必须在同一个位置上停下来，不能无限重试。
       if (offset === lastOffset) {
         if (++stuck > this.cfg.retries) {
+          settleStep(dataStep, false, `卡在 ${offset} 字节处`);
           this.onLog(`位置 ${offset} 连续 ${stuck} 次无法推进，中止`, 'err');
           return { ok: false, reason: 'stuck', offset };
         }
@@ -447,6 +460,7 @@ export class Iap {
                              `DATA#${offset / blockSize}`);
       if (!f) {
         if (++consecutiveFail > this.cfg.retries) {
+          settleStep(dataStep, false, `第 ${offset / blockSize} 帧起连续无应答`);
           this.onLog(`第 ${offset / blockSize} 帧连续失败，中止`, 'err');
           return { ok: false, reason: 'data-timeout' };
         }
@@ -461,8 +475,8 @@ export class Iap {
       const expect = f.data.length >= 9 ? getLe32(f.data, 5) : 0;
 
       if (code !== 0) {
-        this.onLog(`  帧 ${offset / blockSize} ← ${codeName(code)}（期望地址 0x${hex8(expect)}），从该处续传`,
-                   'warn');
+        this.onLog(`  ↻ 帧 ${offset / blockSize}：${codeName(code)}`
+                   + `（续传到 0x${hex8(expect)}）`, 'warn');
         if (expect >= appBase + 8 && expect < appBase + 8 + body.length) {
           offset = expect - appBase - 8;       // 断点续传
         }
@@ -470,8 +484,9 @@ export class Iap {
       }
 
       if (devCrc !== cum) {
-        this.onLog(`  帧 ${offset / blockSize} 板端读回 CRC32 = 0x${hex8(devCrc)}，与主机 0x${hex8(cum)} 不符`,
-                   'err');
+        settleStep(dataStep, false, `第 ${offset / blockSize} 帧读回 CRC32 不符`);
+        this.onLog(`帧 ${offset / blockSize} 板端读回 CRC32 = 0x${hex8(devCrc)}，`
+                   + `与主机 0x${hex8(cum)} 不符`, 'err');
         return { ok: false, reason: 'readback' };
       }
 
@@ -483,18 +498,25 @@ export class Iap {
       this.onProgress(offset, body.length);
     }
 
-    this.onLog(`数据传输完成，用时 ${((now() - t1) / 1000).toFixed(1)} 秒`, 'ok');
+    settleStep(dataStep, true,
+               `${this.stats.frames} 帧 / ${body.length} 字节 · ${((now() - t1) / 1000).toFixed(1)} s`);
 
     // ---- END ----
-    this.onLog('END（回读校验 + 提交）…', 'step');
+    const t2 = now();
+    const endStep = this.onLog('END（回读校验 + 提交）…', 'run');
     f = await this.request(CMD_END, null, this.cfg.endTimeout, 2, 'END');
     if (!f) {
-      this.onLog('END 无应答', 'err');
+      settleStep(endStep, false, '无应答');
       return { ok: false, reason: 'end-no-reply' };
     }
     code = f.data[0];
     const written = f.data.length >= 5 ? getLe32(f.data, 1) : 0;
-    this.onLog(`  ← ${codeName(code)}  written=${written}`, code === 0 ? 'ok' : 'err');
+    {
+      const dur = ((now() - t2) / 1000).toFixed(1);
+      settleStep(endStep, code === 0,
+                 code === 0 ? `written=${written} · ${dur} s`
+                            : `${codeName(code)} · ${dur} s`);
+    }
     if (code !== 0) return { ok: false, reason: 'end', code };
 
     return { ok: true, written, frames: this.stats.frames, retries: this.stats.retries };
@@ -503,6 +525,19 @@ export class Iap {
 
 function codeName(code) {
   return CODE_NAME[code] !== undefined ? CODE_NAME[code] : `未知 0x${code.toString(16)}`;
+}
+
+/**
+ * 结算一个「进行中的步骤」行。
+ *
+ * 句柄来自 `onLog` 的返回值（见 app.js 的 `log()`）—— 结算会把结果并进同一行，
+ * 而不是再起一行，这样不会留下一个永远挂着省略号的壳（也就不会有"错层"）。
+ * 若 onLog 没返回句柄（例如测试里的桩函数），就只是不结算，不影响流程。
+ */
+function settleStep(handle, ok, note) {
+  if (handle && typeof handle.settle === 'function') {
+    handle.settle(ok ? '✔' : '✗', note, ok ? 'ok' : 'err');
+  }
 }
 
 function now() {

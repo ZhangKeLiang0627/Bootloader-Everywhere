@@ -190,6 +190,7 @@ async function runSend(label, raw, dev, opts = {}) {
     },
     async pump() { /* 模拟环境不需要真等 */ },
   };
+  const steps = [];                            // 步骤行：记录它有没有被结算
   iap = new Iap(io, {
     deviceId: 1,
     blockSize: BLOCK,
@@ -197,10 +198,22 @@ async function runSend(label, raw, dev, opts = {}) {
     startTimeout: 500,
     endTimeout: 500,
     retries: 5,
-    onLog: (m) => { logs.push(m); if (process.env.SIM_VERBOSE) console.log('      ' + m); },
+    // 假 onLog：返回一个句柄，用来记录「步骤有没有被结算」。
+    // 真页面里这个句柄对应一行 DOM（见 docs/js/app.js 的 log()）——
+    // 步骤行不结算的话，页面上会留一个永远挂着省略号的壳。
+    onLog: (m, kind = 'info') => {
+      logs.push(m);
+      if (process.env.SIM_VERBOSE) console.log('      ' + m);
+      if (kind !== 'run') return undefined;
+      const rec = { text: m, mark: null, note: '' };
+      steps.push(rec);
+      return {
+        settle(mark, note) { rec.mark = mark; rec.note = note || ''; },
+      };
+    },
   });
   const r = await iap.send(raw, { name: label });
-  return { r, logs, iap };
+  return { r, logs, steps, iap };
 }
 
 // ------------------------------------------------------------ 用例
@@ -271,6 +284,27 @@ async function testBadFirstFrame() {
   check(same, '最终落盘内容正确（坏帧没被写进去）');
 }
 
+async function testStepsAreSettled() {
+  console.log('[4] 步骤行都被结算（不留悬挂的省略号）');
+  const raw = makeImage(1200);
+
+  // 正常路径：板子照常回应 → START / DATA / END 三个步骤都该结算成 ✔ 并带上结果
+  const good = await runSend('steps-ok', raw, new FakeDevice());
+  check(good.r.ok === true, '正常路径升级成功');
+  check(good.steps.length >= 3, `起了 ${good.steps.length} 个步骤行（START / DATA / END）`);
+  check(good.steps.every((s) => s.mark === '✔'),
+    '每个步骤都被结算为 ✔（页面上不会留挂着省略号的壳）');
+  check(good.steps.every((s) => s.note.length > 0),
+    '每个 ✔ 都带结果（blockSize / 帧数 / written）');
+
+  // 失败路径：板子完全不应答 → 也必须结算，否则步骤行永远停在「进行中」
+  const silent = { write: () => [], readAll: () => new Uint8Array(0) };
+  const bad = await runSend('steps-silent', raw, silent);
+  check(bad.r.ok === false, '板子不应答 → 升级失败');
+  check(bad.steps.length === 1, `只起了 START 一个步骤行（实际 ${bad.steps.length}）`);
+  check(bad.steps[0].mark === '✗', '失败路径下 START 也被结算为 ✗（不是 null）');
+}
+
 async function main() {
   console.log('=== 网页端 IAP 逻辑测试（虚拟从机）===\n');
   // 卡死保护：逻辑错成死循环时不要一直挂着
@@ -279,6 +313,7 @@ async function main() {
   await testNormal();
   await testRetryAfterDroppedReply();
   await testBadFirstFrame();
+  await testStepsAreSettled();
 
   console.log(`\n${cases} 项断言，${fails.length} 项失败 → ${fails.length ? 'FAIL' : 'PASS'}`);
   for (const f of fails) console.log('  ✘ ' + f);

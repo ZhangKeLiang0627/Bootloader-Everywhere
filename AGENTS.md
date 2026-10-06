@@ -255,7 +255,8 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
 5. **切分支后不要盲发 `git add -A`**：会把「工作区被清」这件事当成删除一起提交 ——
    `docs/` 被清那次就这么误删了 `docs/PROTOCOL_DESIGN.md`。
    提交前先看一遍 `git status`，`D` 开头的都要先确认是不是被清的。
-6. **同一消息里批量 Edit 同一文件会静默丢部分改动**：改完 grep/Read 复核
+6. **同一消息里批量 Edit 同一文件会静默丢改动**（2026-10-06 又踩到：一批 2-3 个 Edit
+   里必丢一条，而工具仍报成功）。**一个文件一次只发一个 Edit，改完 grep/Read 复核**。
 7. **轮询模型下别发多字节命令**：YMODEM 之外的自定义交互要按字节慢发
 8. **`%lu` 依赖 `%u` 分支**：精简日志格式化时删 `%u` 会让所有 `%lu` 打成字面量 `%u`
    （真板实测暴露过）
@@ -272,6 +273,17 @@ kFlashSectors[]    扇区表 {base, size}；查表用 bl_port.h 的 flashSectorA
 12. **探针复位会置 `SFTRSTF`**：`reset_and_halt()` 让设备被判成「软件复位」→ 进 15 秒
    唤回窗口。所以「复位后是否停 IAP」不能只看 STATUS 有没有应答（窗口期内也有），
    要抓串口启动日志看 `decision: ...` 那一行来区分
+13. **★ 网页日志的类名不要用 `step`**（2026-10-06 实测的 UI bug）：日志行的 class 是
+   `line <kind>`，而步进器按钮用的是 `.step{width:26px;height:26px;padding:0;
+   border-radius:999px}` —— 只要日志 kind 取 `step`，那一整行就会被压成一个 26px 的
+   小胶囊（文字挤成一团），现象是「排版特别奇怪、跟别的行叠在一起」。
+   **改为 `run`**。写新 UI 时注意：**通用的单类名选择器（`.step` / `.bar` / `.stat`）
+   会命中任何带该类名的元素**，跨组件的类名要加前缀（`.line.run` 而不是裸 `.run`）。
+14. **日志行要「时间戳列 + 正文列」两列**：时间戳拼进文本的话，需要缩进的从属行
+   （步骤结果、帧级细节）只缩 2 格、而父行正文在第 12 列起步 → 看着像错位。
+   现在 `.line` 是 flex，`.ts` 固定列、`.tx` 正文列，缩进发生在正文列内。
+   配套：**步骤行要能原地结算**（`log()` 返回句柄，`settle(✔/✗, note)` 把结果并进
+   同一行）—— 否则会留下一个永远挂着 `…` 的壳。
 
 ---
 
@@ -318,9 +330,15 @@ Co-Authored-By: Claude <noreply@anthropic.com>
     `fromelf --i32` 的 .hex 与 `fromelf --bin` 的 .bin 逐字节对照。
   · `tools/test_ui.mjs` —— headless Chrome + CDP 的页面冒烟：页面加载/自检、从机地址
     步进器（含钳位）、`.hex` 选中→解析→按钮状态、错误文件被拒、拖入非法后缀、
-    布局没塌，最后可 `--shot` 截整页图。它**注入一个假的 Web Serial**，
-    所以「点连接之后」的那几条（地址锁定、按钮是否把固件算进去）也能验。
-    用法：先在 `docs/` 起静态服务，再 `node tools/test_ui.mjs --url http://127.0.0.1:8090`。
+    日志排版、布局没塌，最后可 `--shot` 截整页图。
+    它**注入一个假的 Web Serial，而且按协议应答** —— 所以三件事都能验：
+    ① 「点连接之后」的按钮/锁定状态；② 点「开始升级」把整条链跑通（日志里应出现
+    `✔ START` / `✔ DATA` / `✔ END`，且**没有**停在「进行中」的步骤行、没有以省略号
+    结尾的行）；③ 把最终渲染的日志逐行打印出来给人看。
+    用法：先在 `docs/` 起静态服务，再 `node tools/test_ui.mjs --url http://127.0.0.1:8090`
+    （`--shot 文件.png` 存整页截图）。
+    ⚠️ 注入脚本的 base URL 是 `about:blank`，里面的 `import()` 必须给**绝对 URL**
+    （已用 `URL_BASE` 拼好）——相对说明符会报 "base URL is about:blank"。
 - 性能对比（与 YMODEM / esptool / mcumgr / OpenBLT / UDS）见 `docs/PERF_COMPARISON.md`：
   纯协议效率不是瓶颈（换成最省的 YMODEM 也只快 1.2 秒/200KB），
   **波特率是唯一的数量级杠杆**（实测 3.5-4.3 倍），块大小在高速下才重要。

@@ -263,16 +263,81 @@ async function main() {
     { width: 900, height: 1500, deviceScaleFactor: 1, mobile: false });
 
   // 注入一个假的 Web Serial —— 「点连接之后」才成立的那几条断言（按钮是否真的把
-  // 「已选固件」算进去、连接后地址是否被锁）全靠它。只实现页面用到的那几个成员。
+  // 「已选固件」算进去、连接后地址是否被锁）全靠它。
+  //
+  // 而且它**按协议应答**（规则同 docs/PROTOCOL_DESIGN.md §0.5，与 tools/test_iap_sim.mjs
+  // 的虚拟从机一套逻辑），所以还能在这里把「点开始升级」整条链跑通 —— 这是唯一能
+  // 看到日志**最终渲染成什么样**的办法（步骤行有没有结算、有没有悬挂的省略号）。
   await cdp.cmd('Page.addScriptToEvaluateOnNewDocument', {
     source: `(() => {
+      let push = null;
+      const readable = new ReadableStream({ start(c) { push = (b) => c.enqueue(b); } });
+
+      let makeDevice = null;
+      // 注入脚本的 base URL 是 about:blank，相对说明符解析不了 —— 必须给绝对 URL
+      const devReady = import('${URL_BASE}/js/protocol.js').then((m) => {
+        const { Parser, Crc32, encode, getLe32, putLe16, putLe32,
+                DIR_REPLY, CMD_START, CMD_DATA, CMD_END, START_LEN, DATA_HEAD } = m;
+        const APP = 0x08004000, BLK = 512, ID = 1;
+        makeDevice = () => ({
+          parser: new Parser(), state: 'idle', next: 0, written: 0, crc: new Crc32(),
+          reply(cmd, code, extra) {
+            const body = new Uint8Array([code].concat(extra || []));
+            return Array.from(encode(ID, cmd | DIR_REPLY, body));
+          },
+          write(bytes) {
+            const out = [];
+            for (const b of bytes) {
+              const f = this.parser.feed(b);
+              if (!f || f.reply || f.id !== ID) continue;
+              const cmd = f.cmd & ~DIR_REPLY;
+              let r = null;
+              if (cmd === CMD_START) {
+                if (f.data.length < START_LEN) { r = this.reply(CMD_START, 0x05); }
+                else {
+                  this.written = getLe32(f.data, 0);
+                  this.next = 0; this.crc = new Crc32(); this.state = 'receiving';
+                  r = this.reply(CMD_START, 0x00, Array.from(putLe16(BLK)));
+                }
+              } else if (cmd === CMD_DATA) {
+                if (this.state !== 'receiving') { r = this.reply(CMD_DATA, 0x06); }
+                else {
+                  // 回读 CRC32 必须是「已写入字节的真实累积值」，主机会拿它跟自己算的比
+                  const pay = f.data.subarray(DATA_HEAD);
+                  this.crc.update(pay);
+                  this.next += pay.length;
+                  r = this.reply(CMD_DATA, 0x00,
+                        Array.from(putLe32(this.crc.value()))
+                          .concat(Array.from(putLe32(APP + 8 + this.next))));
+                }
+              } else if (cmd === CMD_END) {
+                this.state = 'done';
+                r = this.reply(CMD_END, 0x00, Array.from(putLe32(this.written)));
+              }
+              if (r) out.push(...r);
+            }
+            return out;
+          },
+        });
+      });
+
+      let dev = null;
       const fakePort = {
         open: async () => {},
         close: async () => {},
         getInfo: () => ({ usbVendorId: 0x0483, usbProductId: 0x5740 }),
-        writable: new WritableStream({ write: async () => {} }),
-        readable: new ReadableStream({ start() {} }),   // 不推数据：reader 一直等
+        writable: new WritableStream({
+          write(chunk) {
+            return devReady.then(() => {
+              if (!dev) dev = makeDevice();
+              const replies = dev.write(chunk);
+              if (replies && replies.length) push(new Uint8Array(replies));
+            });
+          },
+        }),
+        readable,
       };
+
       Object.defineProperty(navigator, 'serial', {
         configurable: true,
         value: {
@@ -437,9 +502,74 @@ async function main() {
   ok(pageErrors.length === 0,
     '收尾检查无报错' + (pageErrors.length ? '：' + pageErrors.slice(0, 2).join(' | ') : ''));
 
+  // ---------------------------------------------------------------- ⑨ 日志排版
+  console.log('\n=== [9] 日志排版（时间戳两列 + 类名不撞车）===');
+  const lp = await cdp.eval(`(() => {
+    const box = document.getElementById('log');
+    const rows = [...box.children];
+    const tsW = new Set();
+    const txX = new Set();
+    let badStruct = 0, stepCls = 0, tsWrapped = 0;
+    for (const r of rows) {
+      const ts = r.querySelector(':scope > .ts');
+      const tx = r.querySelector(':scope > .tx');
+      if (!ts || !tx) { badStruct++; continue; }
+      if (r.classList.contains('step')) stepCls++;      // 撞上步进器按钮的类名
+      const tb = ts.getBoundingClientRect();
+      tsW.add(Math.round(tb.width));
+      txX.add(Math.round(tx.getBoundingClientRect().x));
+      if (Math.round(tb.height) > 26) tsWrapped++;
+    }
+    return { rows: rows.length, badStruct, stepCls, tsWrapped,
+             tsWidths: [...tsW], txLefts: [...txX] };
+  })()`);
+  ok(lp.rows >= 3, `日志已累积 ${lp.rows} 行`);
+  ok(lp.badStruct === 0, '每行都是「时间戳列 + 正文列」两列结构');
+  ok(lp.stepCls === 0,
+    '★ 没有日志行带 `step` 类（否则会命中步进器按钮的 26px 胶囊样式）');
+  ok(lp.tsWidths.length === 1, `时间戳列等宽（${lp.tsWidths.join(' / ')} px）`);
+  ok(lp.tsWrapped === 0, '时间戳不换行（始终单行成列）');
+  ok(lp.txLefts.length === 1,
+    `正文列左边缘对齐（${lp.txLefts.join(' / ')} px）—— 需要缩进的从属行不会"错层"`);
+
+  // ---------------------------------------------------------------- ⑩ 跑一次完整升级
+  console.log('\n=== [10] 完整升级（假板子按协议应答）===');
+  await cdp.eval(`document.getElementById('btnSend').click();`);
+  await cdp.waitFor('(() => { const t = document.getElementById("log").textContent;'
+    + ' return t.indexOf("升级完成") >= 0 || t.indexOf("升级失败") >= 0; })()',
+    45000, '升级结束');
+
+  const up = await cdp.eval(`(() => {
+    const rows = [...document.getElementById('log').children];
+    const txt = (e) => { const t = e.querySelector('.tx'); return t ? t.textContent : ''; };
+    const lines = rows.map(txt);
+    return {
+      lines: lines,
+      runLeft: rows.filter((e) => e.classList.contains('run')).length,
+      dangling: lines.filter((l) => /…\\s*\$/.test(l)).length,
+      marks: lines.filter((l) => l.charAt(0) === '✔' || l.charAt(0) === '✗').length,
+      bar: document.getElementById('bar').textContent,
+    };
+  })()`);
+
+  console.log('  --- 页面日志（最终渲染，逐行原样）---');
+  for (const l of up.lines) console.log('   | ' + l);
+
+  ok(up.lines.some((l) => l.indexOf('✔ 唤回 Bootloader') === 0), '唤回步骤结算为 ✔');
+  ok(up.lines.some((l) => l.indexOf('✔ START') === 0), 'START 步骤结算为 ✔');
+  ok(up.lines.some((l) => l.indexOf('✔ DATA') === 0), 'DATA 步骤结算为 ✔');
+  ok(up.lines.some((l) => l.indexOf('✔ END') === 0), 'END 步骤结算为 ✔');
+  ok(up.runLeft === 0, '★ 没有停留在「进行中」的步骤行');
+  ok(up.dangling === 0, '★ 没有以省略号结尾的行（不会留下悬挂的壳）');
+  ok(up.marks >= 4, `带结算标记的步骤行 ${up.marks} 个`);
+  ok(up.bar === '100%', `进度条到 100%（实际 ${up.bar}）`);
+  ok(up.lines.some((l) => l.indexOf('升级完成') >= 0), '日志给出升级完成');
+  ok(pageErrors.length === 0, '整条升级过程页面无报错'
+    + (pageErrors.length ? '：' + pageErrors[0] : ''));
+
   // ---------------------------------------------------------------- 截图
   if (SHOT) {
-    console.log('\n=== [9] 整页截图 ===');
+    console.log('\n=== [11] 整页截图 ===');
     if (SHOT_EMPTY) {
       await cdp.cmd('Page.reload');                             // 回到「刚打开」的状态
       await cdp.waitFor('document.readyState === "complete"', 15000, '刷新');

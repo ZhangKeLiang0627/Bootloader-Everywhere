@@ -24,11 +24,24 @@ docs/
 
 ```bash
 node tools/test_protocol_js.mjs          # 载体层：CRC8 / CRC32 / 组帧 / 解析 / 重同步 / 帧长自检
-node tools/test_iap_sim.mjs              # IAP 逻辑：用虚拟从机跑完 START → DATA → END
+node tools/test_iap_sim.mjs              # IAP 逻辑：用虚拟从机跑完 START → DATA → END，并验证步骤行都结算
 node tools/test_hex.mjs                  # .hex 解析：手工向量 / 往返 / 错误用例 / 与真实 Keil 产物比对
-node tools/test_ui.mjs                   # 页面冒烟（headless Chrome）：表单状态 + .hex 选择流程 + 布局
 python TestApp/tools/proto.py selftest   # Python 侧同一组向量
 ```
+
+页面测试要连一个静态服务（`tools/test_ui.mjs` 用系统自带的 headless Chrome + CDP，
+不需要装 puppeteer/playwright）。它**注入一个假 Web Serial 并按协议应答**，所以能把
+「点开始升级」整条链跑通，并把最终渲染的日志逐行打出来：
+
+```bash
+cd docs && python -m http.server 8090 --bind 127.0.0.1     # 另开一个终端
+node tools/test_ui.mjs --url http://127.0.0.1:8090 --shot ui.png
+```
+
+> 写页面代码时的两条约定（踩过坑，见 `AGENTS.md` §8）：
+> ① 日志 kind 不要叫 `step` —— 那是步进器按钮的类名，会把整行压成 26px 胶囊；
+> ② 日志行是「时间戳列 + 正文列」两列，**步骤行要能原地结算**（`log()` 返回句柄，
+> 结束时 `settle('✔', '结果')` 把结果并进同一行），别另起一行、也别留悬挂的省略号。
 
 > 目录名是 `docs/` 而非 `web/`：GitHub Pages 的 legacy source 只认根目录或
 > `/docs` 文件夹，用这个约定目录才能免 workflow 直接发布。
